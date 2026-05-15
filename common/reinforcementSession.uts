@@ -1,0 +1,188 @@
+import { ref } from 'vue'
+import { hcCommandToBuffer, buildGetHdateCommandBody, TAG_HDATE } from './bleCommands.uts'
+
+export type AreaBlock = { values: Array<string> }
+
+export const AREA_COUNT = 2
+export const SLOTS = 10
+
+/** GY62 钢筋扫描仪（Hoperf）主服务 */
+export const BLE_SERVICE_ID = 'B810093A-9130-B955-2BA1-29A9807C0F69'
+export const BLE_NOTIFY_CHAR_ID = '00008001-0000-1000-8000-00805F9B34FB'
+export const BLE_WRITE_CHAR_ID = '00008002-0000-1000-8000-00805F9B34FB'
+export const BLE_READ_CHAR_ID = '00008003-0000-1000-8000-00805F9B34FB'
+/** 辅服务（仅写，按需扩展） */
+export const BLE_AUX_SERVICE_ID = '1D14D6EE-FD63-4FA1-BFA4-8F47B42119F0'
+export const BLE_AUX_WRITE_CHAR_ID = 'F7BF3564-FB6D-4E53-88A4-5E37E0326063'
+
+export const sessionDeviceId = ref('')
+export const sessionBleReady = ref(false)
+export const sessionServiceId = ref(BLE_SERVICE_ID)
+export const sessionNotifyCharId = ref(BLE_NOTIFY_CHAR_ID)
+export const sessionWriteCharId = ref(BLE_WRITE_CHAR_ID)
+
+export function buildEmptyAreas(): Array<AreaBlock> {
+	const list = new Array<AreaBlock>()
+	for (let a = 0; a < AREA_COUNT; a++) {
+		const vals = new Array<string>()
+		for (let i = 0; i < SLOTS; i++) {
+			vals.push('')
+		}
+		list.push({ values: vals })
+	}
+	return list
+}
+
+export const areas = ref<Array<AreaBlock>>(buildEmptyAreas())
+export const activeAreaIndex = ref(0)
+export const activeSlotIndex = ref(0)
+
+/** +HDATE: 解析结果（与协议表字段顺序一致） */
+export type ReinforcementHdateRecord = {
+	goujianNo: string
+	centerOffset: string
+	detectState: string
+	displacement: string
+	barSerial1: string
+	position1: string
+	thickness1: string
+	barSerial2: string
+	position2: string
+	thickness2: string
+}
+
+/** 请求历史时下发的构件编号（可空） */
+export const hdateQueryComponentNo = ref('')
+/** 最近一次成功解析的 +HDATE 数据 */
+export const hdateRecord = ref<ReinforcementHdateRecord | null>(null)
+/** 最近一次收到的原始文本（调试用） */
+export const hdateLastRaw = ref('')
+
+export function selectCell(ai: number, si: number) {
+	activeAreaIndex.value = ai
+	activeSlotIndex.value = si
+}
+
+export function resetMeasureCursorToFirst() {
+	activeAreaIndex.value = 0
+	activeSlotIndex.value = 0
+}
+
+export function advanceMeasureCursorAfterValue() {
+	const ai = activeAreaIndex.value
+	const si = activeSlotIndex.value
+	if (si < SLOTS - 1) {
+		activeSlotIndex.value = si + 1
+		return
+	}
+	if (ai < AREA_COUNT - 1) {
+		activeAreaIndex.value = ai + 1
+		activeSlotIndex.value = 0
+		return
+	}
+}
+
+export function setActiveValue(text: string) {
+	const ai = activeAreaIndex.value
+	const si = activeSlotIndex.value
+	const block = areas.value[ai]
+	const next = block.values.slice(0)
+	next[si] = text
+	const copy = areas.value.slice(0)
+	copy[ai] = { values: next }
+	areas.value = copy
+}
+
+function splitCommaFields(body: string): Array<string> {
+	const out = new Array<string>()
+	let cur = ''
+	for (let i = 0; i < body.length; i++) {
+		const ch = body.charAt(i)
+		if (ch == ',') {
+			out.push(cur)
+			cur = ''
+		} else {
+			cur = cur + ch
+		}
+	}
+	out.push(cur)
+	return out
+}
+
+function fieldAt(parts: Array<string>, index: number): string {
+	if (index >= 0 && index < parts.length) {
+		return parts[index].trim()
+	}
+	return ''
+}
+
+/**
+ * 若文本为 +HDATE:… 则解析 10 个逗号分隔字段并写入 hdateRecord，返回 true。
+ * 非 HDATE 回包返回 false，由页面继续按测量值处理。
+ */
+export function parseHdateNotifyText(line: string): boolean {
+	let s = line.trim()
+	const pre = TAG_HDATE
+	if (s.length < pre.length) {
+		return false
+	}
+	if (s.substring(0, pre.length) != pre) {
+		return false
+	}
+	let body = s.substring(pre.length)
+	body = body.trim()
+	const parts = splitCommaFields(body)
+	const rec: ReinforcementHdateRecord = {
+		goujianNo: fieldAt(parts, 0),
+		centerOffset: fieldAt(parts, 1),
+		detectState: fieldAt(parts, 2),
+		displacement: fieldAt(parts, 3),
+		barSerial1: fieldAt(parts, 4),
+		position1: fieldAt(parts, 5),
+		thickness1: fieldAt(parts, 6),
+		barSerial2: fieldAt(parts, 7),
+		position2: fieldAt(parts, 8),
+		thickness2: fieldAt(parts, 9),
+	}
+	hdateRecord.value = rec
+	hdateLastRaw.value = s
+	return true
+}
+
+/** 向已连接设备下发获取厚度历史指令（使用 hdateQueryComponentNo） */
+export function sessionRequestHdateHistory(): boolean {
+	const body = buildGetHdateCommandBody(hdateQueryComponentNo.value)
+	return sessionWriteBle(hcCommandToBuffer(body))
+}
+
+function sessionWriteBleWithMode(buffer: ArrayBuffer, writeType: string) {
+	// #ifdef MP-WEIXIN
+	uni.writeBLECharacteristicValue({
+		deviceId: sessionDeviceId.value,
+		serviceId: sessionServiceId.value,
+		characteristicId: sessionWriteCharId.value,
+		value: buffer,
+		writeType: writeType,
+		success: () => {},
+		fail: (e) => {
+			console.error('re sessionWriteBLE', writeType, e)
+			if (writeType == 'writeNoResponse') {
+				sessionWriteBleWithMode(buffer, 'write')
+			}
+		},
+	})
+	// #endif
+}
+
+export function sessionWriteBle(buffer: ArrayBuffer): boolean {
+	// #ifdef MP-WEIXIN
+	if (sessionDeviceId.value.length == 0 || !sessionBleReady.value) {
+		return false
+	}
+	sessionWriteBleWithMode(buffer, 'writeNoResponse')
+	return true
+	// #endif
+	// #ifndef MP-WEIXIN
+	return false
+	// #endif
+}

@@ -1,0 +1,67 @@
+/**
+ * 仪器 HC 文本协议：每条指令以 \r\n 结束
+ */
+export const BLE_LINE_END = '\r\n'
+
+export const CMD_GETHTPARA = 'HC+GETHTPARA'
+export const CMD_SAMPSTART = 'HC+SAMPSTART'
+export const CMD_GETHTLD = 'HC+GETHTLD'
+/** 设置碳化，设备回包 +SETHTH: … */
+export const TAG_SETHTH = '+SETHTH:'
+/** 退出采集 */
+export const CMD_SAMPEND = 'HC+SAMPEND'
+/** 关机 */
+export const CMD_PWROFF = 'HC+PWROFF'
+/** 请求厚度历史；若与说明书不一致，请改此常量或 buildGetHdateCommandBody */
+export const CMD_GETHDATE = 'HC+GETHDATE'
+
+export const TAG_GETHTPARA = '+GETHTPARA:'
+export const TAG_GETHTLD = '+GETHTLD:'
+/** 钢筋仪：实时厚度历史数据回包前缀，后为逗号分隔 10 字段 */
+export const TAG_HDATE = '+HDATE:'
+export const TAG_SAMPSTART_OK = '+SAMPSTART:OK'
+export const TAG_SAMPEND_OK = '+SAMPEND:OK'
+export const TAG_PWROFF_OK = '+PWROFF:OK'
+
+
+export function hcLine(cmdBody: string): string {
+	return cmdBody + BLE_LINE_END
+}
+
+export function hcCommandToBuffer(cmdBody: string): ArrayBuffer {
+	const s = hcLine(cmdBody)
+	const u8 = new Uint8Array(s.length)
+	for (let i = 0; i < s.length; i++) {
+		u8[i] = s.charCodeAt(i) & 0xff
+	}
+	return u8.buffer
+}
+
+/** 构件编号为空时仅发 HC+GETHDATE；否则 HC+GETHDATE=编号 */
+export function buildGetHdateCommandBody(componentNo: string): string {
+	const t = componentNo.trim()
+	if (t.length == 0) {
+		return CMD_GETHDATE
+	}
+	return CMD_GETHDATE + '=' + t
+}
+
+/**
+ * HC+SETHTH=<n>, <v1>, …, <vn>（与说明书一致，逗号后空格）
+ * n 与 averages.length 须一致，且每项非空；校验失败返回空串。
+ */
+export function buildSetHthCommandBody(areaCount: number, averages: Array<string>): string {
+	if (areaCount < 1 || averages.length != areaCount) {
+		return ''
+	}
+	const parts = new Array<string>()
+	parts.push(`${areaCount}`)
+	for (let i = 0; i < areaCount; i++) {
+		const v = averages[i].trim()
+		if (v.length == 0) {
+			return ''
+		}
+		parts.push(v)
+	}
+	return 'HC+SETHTH=' + parts.join(', ')
+}

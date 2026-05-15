@@ -1,0 +1,59 @@
+{
+	"pages": [
+		{
+			"path": "pages/choiceModule/choiceModule",
+			"style": {
+				"navigationBarTitleText": "智能测量实训"
+			}
+		},
+		{
+			"path": "pages/concrete/concrete",
+			"style": {
+				"navigationBarTitleText": "混凝土强度"
+			}
+		},
+		{
+			"path": "pages/concrete/measure",
+			"style": {
+				"navigationBarTitleText": "测区采集"
+			}
+		},
+		{
+			"path": "pages/concrete/summary",
+			"style": {
+				"navigationBarTitleText": "汇总提交"
+			}
+		},
+		{
+			"path": "pages/index/index",
+			"style": {
+				"navigationBarTitleText": "uni-app x"
+			}
+		},
+		{
+			"path": "pages/details/details",
+			"style": {
+				"navigationBarTitleText": ""
+			}
+		},
+		{
+			"path": "pages/Reinforcement/Reinforcement",
+			"style": {
+				"navigationBarTitleText": "钢筋保护层"
+			}
+		},
+		{
+			"path": "pages/floorSlab/floorSlab",
+			"style": {
+				"navigationBarTitleText": "楼板厚度"
+			}
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "uni-app x",
+		"navigationBarBackgroundColor": "#F8F8F8",
+		"backgroundColor": "#F8F8F8"
+	},
+	"uniIdRouter": {}
+}

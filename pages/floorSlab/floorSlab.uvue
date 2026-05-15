@@ -1,0 +1,326 @@
+<template>
+	<scroll-view class="page-scroll" scroll-y="true">
+		<view class="section hint">
+			<text class="hint-text">（打开蓝牙后，点击图标进行设备连接）</text>
+		</view>
+
+		<view class="section actions">
+			<view class="action-circle" @click="onDeviceClick">
+				<view class="device-icon-wrap" :class="{ connected: bleConnected }">
+					<text class="device-emoji">📏</text>
+				</view>
+				<text class="action-label">楼板厚度</text>
+				<text class="status-text">{{ bleStatusText }}</text>
+			</view>
+		</view>
+
+		<view class="section form-block">
+			<view class="form-row">
+				<text class="form-label">测量内容</text>
+				<text class="form-value">{{ contentLabel }}</text>
+			</view>
+			<view class="form-row form-row-last">
+				<text class="form-label">测量仪器</text>
+				<text class="form-value">{{ instrumentLabel }}</text>
+			</view>
+		</view>
+
+		<view class="section upload-block">
+			<text class="block-title">上传现场图片</text>
+			<text class="sub-hint">（图片内容最好体现测区的划分）</text>
+			<view class="upload-row" @click="choosePhoto">
+				<image v-if="photoPath.length > 0" class="preview" :src="photoPath" mode="aspectFill" />
+				<view v-else class="upload-placeholder">
+					<text class="plus">+</text>
+					<text class="upload-text">选择图片</text>
+				</view>
+			</view>
+		</view>
+
+		<view class="section area-block" v-for="(val, ai) in areaValues" :key="ai">
+			<text class="area-title">测量区{{ ai + 1 }}</text>
+			<view
+				class="value-box"
+				:class="{ active: activeAreaIndex == ai }"
+				@click="focusArea(ai)"
+			>
+				<input
+					class="value-input"
+					type="text"
+					:value="areaValues[ai]"
+					placeholder="数值1"
+					@focus="focusArea(ai)"
+					@input="onAreaInput(ai, $event)"
+				/>
+			</view>
+		</view>
+
+		<button class="submit-btn" type="primary" @click="onSubmit">提交</button>
+		<view class="bottom-space" />
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	const AREA_COUNT = 4
+
+	const contentLabel = '楼板厚度'
+	const instrumentLabel = '楼板测厚仪'
+
+	const bleConnected = ref(false)
+	const bleStatusText = ref('未连接')
+	const photoPath = ref('')
+	const activeAreaIndex = ref(0)
+
+	function buildEmptyValues(): Array<string> {
+		const list = new Array<string>()
+		for (let i = 0; i < AREA_COUNT; i++) {
+			list.push('')
+		}
+		return list
+	}
+
+	const areaValues = ref<Array<string>>(buildEmptyValues())
+
+	function focusArea(ai: number) {
+		activeAreaIndex.value = ai
+	}
+
+	function onAreaInput(ai: number, e: UniInputEvent) {
+		const next = areaValues.value.slice(0)
+		next[ai] = e.detail.value as string
+		areaValues.value = next
+		activeAreaIndex.value = ai
+	}
+
+	function onDeviceClick() {
+		// #ifdef MP-WEIXIN
+		uni.showToast({ title: '蓝牙连接功能开发中', icon: 'none' })
+		// #endif
+		// #ifndef MP-WEIXIN
+		uni.showToast({ title: '请在微信小程序中连接设备', icon: 'none' })
+		// #endif
+	}
+
+	function choosePhoto() {
+		uni.chooseImage({
+			count: 1,
+			sizeType: ['compressed'],
+			sourceType: ['album', 'camera'],
+			success: (res) => {
+				const paths = res.tempFilePaths
+				if (paths.length > 0) {
+					photoPath.value = paths[0]
+				}
+			},
+		})
+	}
+
+	function onSubmit() {
+		const payload = {
+			content: contentLabel,
+			instrument: instrumentLabel,
+			photo: photoPath.value,
+			areas: areaValues.value,
+		}
+		console.log('floorSlab submit', payload)
+		uni.showToast({ title: '已提交', icon: 'success' })
+	}
+</script>
+
+<style>
+	.page-scroll {
+		flex: 1;
+		height: 100vh;
+		background-color: #f5f6f8;
+	}
+
+	.section {
+		padding: 24rpx 32rpx;
+	}
+
+	.hint {
+		padding-top: 8rpx;
+		padding-bottom: 4rpx;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.hint-text {
+		font-size: 24rpx;
+		color: #666;
+		line-height: 1.5;
+		text-align: center;
+	}
+
+	.actions {
+		flex-direction: row;
+		justify-content: center;
+		align-items: center;
+		padding-top: 8rpx;
+		padding-bottom: 8rpx;
+	}
+
+	.action-circle {
+		flex-direction: column;
+		align-items: center;
+		width: 280rpx;
+	}
+
+	.device-icon-wrap {
+		width: 160rpx;
+		height: 160rpx;
+		border-radius: 80rpx;
+		background-color: #e8ecf1;
+		align-items: center;
+		justify-content: center;
+		border-width: 4rpx;
+		border-style: solid;
+		border-color: transparent;
+	}
+
+	.device-icon-wrap.connected {
+		border-color: #007aff;
+		background-color: #f0f6ff;
+	}
+
+	.device-emoji {
+		font-size: 64rpx;
+	}
+
+	.action-label {
+		margin-top: 16rpx;
+		font-size: 26rpx;
+		color: #333;
+	}
+
+	.status-text {
+		margin-top: 8rpx;
+		font-size: 22rpx;
+		color: #888;
+	}
+
+	.form-block {
+		background-color: #fff;
+		border-radius: 16rpx;
+		margin-left: 24rpx;
+		margin-right: 24rpx;
+		padding: 0 24rpx;
+	}
+
+	.form-row {
+		flex-direction: row;
+		align-items: center;
+		padding: 28rpx 0;
+		border-bottom-width: 1rpx;
+		border-bottom-style: solid;
+		border-bottom-color: #eee;
+	}
+
+	.form-row-last:last-child {
+		border-bottom-width: 0;
+	}
+
+	.form-label {
+		font-size: 28rpx;
+		color: #333;
+		width: 200rpx;
+	}
+
+	.form-value {
+		flex: 1;
+		font-size: 28rpx;
+		color: #888;
+		text-align: right;
+	}
+
+	.upload-block {
+		padding-top: 8rpx;
+	}
+
+	.block-title {
+		font-size: 30rpx;
+		color: #333;
+		font-weight: bold;
+	}
+
+	.sub-hint {
+		margin-top: 8rpx;
+		font-size: 24rpx;
+		color: #888;
+		line-height: 1.4;
+	}
+
+	.upload-row {
+		margin-top: 20rpx;
+	}
+
+	.upload-placeholder {
+		width: 200rpx;
+		height: 200rpx;
+		background-color: #e8ecf1;
+		border-radius: 12rpx;
+		align-items: center;
+		justify-content: center;
+		flex-direction: column;
+	}
+
+	.plus {
+		font-size: 48rpx;
+		color: #999;
+	}
+
+	.upload-text {
+		margin-top: 8rpx;
+		font-size: 24rpx;
+		color: #888;
+	}
+
+	.preview {
+		width: 200rpx;
+		height: 200rpx;
+		border-radius: 12rpx;
+	}
+
+	.area-block {
+		padding-top: 16rpx;
+		padding-bottom: 8rpx;
+	}
+
+	.area-title {
+		font-size: 28rpx;
+		color: #333;
+		font-weight: bold;
+		margin-bottom: 16rpx;
+	}
+
+	.value-box {
+		background-color: #e8ecf1;
+		border-radius: 8rpx;
+		border-width: 2rpx;
+		border-style: solid;
+		border-color: transparent;
+		padding: 24rpx 28rpx;
+	}
+
+	.value-box.active {
+		border-color: #007aff;
+		background-color: #f0f6ff;
+	}
+
+	.value-input {
+		width: 100%;
+		font-size: 28rpx;
+		color: #333;
+	}
+
+	.submit-btn {
+		margin: 32rpx 24rpx 0 24rpx;
+		background-color: #007aff;
+		border-radius: 8rpx;
+		font-size: 32rpx;
+	}
+
+	.bottom-space {
+		height: 48rpx;
+	}
+</style>

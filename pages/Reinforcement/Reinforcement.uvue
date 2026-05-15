@@ -1,0 +1,1150 @@
+<template>
+	<scroll-view class="page-scroll" scroll-y="true">
+		<view class="section hint">
+			<text class="hint-text">（打开蓝牙后，点击图标进行设备连接）</text>
+		</view>
+
+		<view class="section actions">
+			<view class="action-circle" @click="onDeviceClick">
+				<view class="device-icon-wrap" :class="{ connected: bleConnected }">
+					<text class="device-emoji">📡</text>
+				</view>
+				<text class="action-label">钢筋保护层</text>
+				<text class="status-text">{{ bleStatusText }}</text>
+			</view>
+		</view>
+
+		<view class="section form-block">
+			<view class="form-row form-row-last">
+				<text class="form-label">测量内容</text>
+				<text class="form-value">{{ contentLabel }}</text>
+			</view>
+			<view class="form-row form-row-last">
+				<text class="form-label">测量仪器</text>
+				<text class="form-value">{{ instrumentLabel }}</text>
+			</view>
+		</view>
+
+		<view class="sketch-title-wrap">
+			<text class="block-title">钢筋扫描示意</text>
+		</view>
+
+		<view class="section sketch-block">
+			<view v-for="sectionIndex in SECTION_COUNT" :key="sectionIndex" class="sketch-sub-block">
+				<view class="scan-visual-wrap">
+					<view class="scan-center-line" />
+					<view class="scan-top-row">
+						<view class="scan-bar-cell">
+							<text class="scan-index">{{ barDisplayIndex(sectionIndex - 1, 0) }}</text>
+							<view class="scan-bar" />
+						</view>
+						<view class="scan-gap-cell">
+							<text class="scan-gap-value">{{ distanceDisplayValue(sectionIndex - 1, 0) }}mm</text>
+							<text class="scan-gap-arrow">↔</text>
+						</view>
+						<view class="scan-bar-cell">
+							<text class="scan-index">{{ barDisplayIndex(sectionIndex - 1, 1) }}</text>
+							<view class="scan-bar" />
+						</view>
+						<view class="scan-gap-cell">
+							<text class="scan-gap-value">{{ distanceDisplayValue(sectionIndex - 1, 1) }}mm</text>
+							<text class="scan-gap-arrow">↔</text>
+						</view>
+						<view class="scan-bar-cell">
+							<text class="scan-index">{{ barDisplayIndex(sectionIndex - 1, 2) }}</text>
+							<view class="scan-bar" />
+						</view>
+						<view class="scan-gap-cell">
+							<text class="scan-gap-value">{{ distanceDisplayValue(sectionIndex - 1, 2) }}mm</text>
+							<text class="scan-gap-arrow">↔</text>
+						</view>
+						<view class="scan-bar-cell">
+							<text class="scan-index">{{ barDisplayIndex(sectionIndex - 1, 3) }}</text>
+							<view class="scan-bar" />
+						</view>
+					</view>
+				</view>
+				<view class="scan-thickness-row">
+					<view class="scan-bottom-bar-space">
+						<view class="scan-thk-wrap">
+							<view class="scan-thk-box"><text class="scan-thk-val">{{ thicknessDisplayText(sectionIndex - 1, 0) }}</text></view>
+						</view>
+					</view>
+					<view class="scan-bottom-gap" />
+					<view class="scan-bottom-bar-space">
+						<view class="scan-thk-wrap">
+							<view class="scan-thk-box"><text class="scan-thk-val">{{ thicknessDisplayText(sectionIndex - 1, 1) }}</text></view>
+						</view>
+					</view>
+					<view class="scan-bottom-gap" />
+					<view class="scan-bottom-bar-space">
+						<view class="scan-thk-wrap">
+							<view class="scan-thk-box"><text class="scan-thk-val">{{ thicknessDisplayText(sectionIndex - 1, 2) }}</text></view>
+						</view>
+					</view>
+					<view class="scan-bottom-gap" />
+					<view class="scan-bottom-bar-space">
+						<view class="scan-thk-wrap">
+							<view class="scan-thk-box"><text class="scan-thk-val">{{ thicknessDisplayText(sectionIndex - 1, 3) }}</text></view>
+						</view>
+					</view>
+				</view>
+			</view>
+		</view>
+
+		<button class="submit-btn" type="primary" @click="onSubmit">提交</button>
+		<view class="bottom-space" />
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import {
+		sessionDeviceId,
+		sessionBleReady,
+		sessionServiceId,
+		sessionNotifyCharId,
+		sessionWriteCharId,
+		BLE_SERVICE_ID,
+		BLE_NOTIFY_CHAR_ID,
+		BLE_WRITE_CHAR_ID,
+	} from '../../common/reinforcementSession.uts'
+	import { CMD_SAMPSTART, hcCommandToBuffer } from '../../common/bleCommands.uts'
+
+	const contentLabel = '钢筋保护层'
+	const instrumentLabel = '钢筋扫描仪'
+	const BARS_PER_SECTION = 4
+	const SECTION_COUNT = 5
+	const UI_REFRESH_MS = 200
+	const ALIGN_THRESHOLD = 5
+	const RELEASE_DISTANCE = 20
+
+	const bleConnected = ref(false)
+	const bleStatusText = ref('未连接')
+	const deviceName = ref('--')
+	const deviceId = ref('')
+	let nameFilter = ''
+
+	type HdRebar = {
+		index: number
+		position: number
+		thickness: number
+	}
+	type HdModel = {
+		componentId: string
+		offset: number
+		status: number
+		currentPosition: number
+		rebar1: HdRebar
+		rebar2: HdRebar
+	}
+	type UiRebarRecord = {
+		index: number
+		position: number
+		thickness: number
+		spacing: string
+	}
+
+	const uiComponentId = ref('--')
+	const uiOffset = ref('--')
+	const uiStatus = ref('--')
+	const uiCurrentPosition = ref('--')
+	const uiThickness = ref('--')
+	const uiHint = ref('等待数据')
+	const uiLastRaw = ref('')
+	const uiRecords = ref<Array<UiRebarRecord>>(new Array<UiRebarRecord>())
+	const previewThickness = ['32', '30', '30', '30', '31', '29', '30', '30', '32', '30', '29', '30', '31', '30', '30', '29', '32', '30', '30', '30']
+	const previewDistance = ['100', '100', '100', '100', '100', '100', '100', '100', '100', '100', '100', '100', '100', '100', '100']
+
+	const BLE_GAP_SERVICE_ID = '00001800-0000-1000-8000-00805F9B34FB'
+	const BLE_GAP_DEVICE_NAME_CHAR_ID = '00002A00-0000-1000-8000-00805F9B34FB'
+	const TARGET_NAME_KEY = 'GY62'
+
+	let activeServiceId = BLE_SERVICE_ID
+	let activeNotifyCharId = BLE_NOTIFY_CHAR_ID
+	let activeWriteCharId = BLE_WRITE_CHAR_ID
+
+	let discoveryStarted = false
+	let bleListenersReady = false
+	let discoveryPermissionDenied = false
+	let discoveryPermissionTipShown = false
+	let notifyRetryCount = 0
+	let notifyRetryTimer = -1
+	let pairingTriggered = false
+	let notifyPairingHintShown = false
+	let uiFlushTimer = -1
+	let latestDataMem: HdModel | null = null
+	let latestRawMem = ''
+	const recordMem = new Array<UiRebarRecord>()
+	let recordState = 'waiting'
+	let lockedIndex = 0
+	let lockPosition = 0
+	let lastRecordKey = ''
+
+	function syncBleToSession() {
+		sessionDeviceId.value = deviceId.value
+		sessionBleReady.value = bleConnected.value
+		sessionServiceId.value = activeServiceId
+		sessionNotifyCharId.value = activeNotifyCharId
+		sessionWriteCharId.value = activeWriteCharId
+	}
+
+	function parseNotifyToText(buffer: ArrayBuffer): string {
+		const u8 = new Uint8Array(buffer)
+		if (u8.length == 0) {
+			return ''
+		}
+		let s = ''
+		for (let i = 0; i < u8.length; i++) {
+			const c = u8[i]
+			if (c >= 32 && c <= 126) {
+				s += String.fromCharCode(c)
+			}
+		}
+		if (s.length > 0) {
+			return s.trim()
+		}
+		let num = 0
+		for (let i = 0; i < u8.length; i++) {
+			num = (num << 8) | u8[i]
+		}
+		return `${num}`
+	}
+
+	function uuidEquals(a: string, b: string): boolean {
+		return a.toLowerCase() == b.toLowerCase()
+	}
+
+	function stopDiscoverySafe() {
+		if (!discoveryStarted) {
+			return
+		}
+		discoveryStarted = false
+		uni.stopBluetoothDevicesDiscovery({
+			complete: () => {},
+		})
+	}
+
+	function teardownBle() {
+		stopDiscoverySafe()
+		if (notifyRetryTimer >= 0) {
+			clearTimeout(notifyRetryTimer)
+			notifyRetryTimer = -1
+		}
+		notifyRetryCount = 0
+		pairingTriggered = false
+		notifyPairingHintShown = false
+		if (deviceId.value.length > 0) {
+			uni.closeBLEConnection({
+				deviceId: deviceId.value,
+				complete: () => {},
+			})
+			deviceId.value = ''
+		}
+		bleConnected.value = false
+		bleStatusText.value = '未连接'
+		deviceName.value = '--'
+		activeServiceId = BLE_SERVICE_ID
+		activeNotifyCharId = BLE_NOTIFY_CHAR_ID
+		activeWriteCharId = BLE_WRITE_CHAR_ID
+		syncBleToSession()
+	}
+
+	function clearDetectionRuntime() {
+		latestDataMem = null
+		latestRawMem = ''
+		recordMem.splice(0, recordMem.length)
+		recordState = 'waiting'
+		lockedIndex = 0
+		lockPosition = 0
+		lastRecordKey = ''
+		uiComponentId.value = '--'
+		uiOffset.value = '--'
+		uiStatus.value = '--'
+		uiCurrentPosition.value = '--'
+		uiThickness.value = '--'
+		uiHint.value = '等待数据'
+		uiLastRaw.value = ''
+		uiRecords.value = new Array<UiRebarRecord>()
+	}
+
+	function scheduleSubscribeRetry(delayMs: number) {
+		if (notifyRetryTimer >= 0) {
+			clearTimeout(notifyRetryTimer)
+		}
+		notifyRetryTimer = setTimeout(() => {
+			notifyRetryTimer = -1
+			if (deviceId.value.length == 0) {
+				return
+			}
+			subscribeNotify()
+		}, delayMs)
+	}
+
+	function isEncryptionInsufficientMsg(msg: string): boolean {
+		const m = msg.toLowerCase()
+		return (
+			m.indexOf('encryption is insufficient') >= 0 ||
+			m.indexOf('encryption insufficient') >= 0 ||
+			msg.indexOf('加密不足') >= 0 ||
+			msg.indexOf('加密') >= 0
+		)
+	}
+
+	function triggerPairingByWrite() {
+		const buffer = hcCommandToBuffer(CMD_SAMPSTART)
+		const doWrite = (writeType: string) => {
+			uni.writeBLECharacteristicValue({
+				deviceId: deviceId.value,
+				serviceId: activeServiceId,
+				characteristicId: activeWriteCharId,
+				value: buffer,
+				writeType: writeType,
+				success: () => {},
+				fail: () => {
+					if (writeType == 'writeNoResponse') {
+						doWrite('write')
+					}
+				},
+			})
+		}
+		doWrite('writeNoResponse')
+	}
+
+	function subscribeNotifyInternal(enable: boolean, then: () => void) {
+		uni.notifyBLECharacteristicValueChange({
+			deviceId: deviceId.value,
+			serviceId: activeServiceId,
+			characteristicId: activeNotifyCharId,
+			state: enable,
+			success: () => {
+				then()
+			},
+			fail: () => {
+				then()
+			},
+		})
+	}
+
+	function subscribeNotify() {
+		const onSuccess = () => {
+			notifyRetryCount = 0
+			pairingTriggered = false
+			notifyPairingHintShown = false
+			if (notifyRetryTimer >= 0) {
+				clearTimeout(notifyRetryTimer)
+				notifyRetryTimer = -1
+			}
+			bleConnected.value = true
+			bleStatusText.value = '已连接'
+			syncBleToSession()
+			clearDetectionRuntime()
+		}
+		const onFail = (err: any) => {
+			console.error('re notify fail', err, activeServiceId, activeNotifyCharId)
+			bleStatusText.value = '已连上但未订阅通知'
+			syncBleToSession()
+			const msg = `${err.errMsg}`
+			if (isEncryptionInsufficientMsg(msg)) {
+				if (!notifyPairingHintShown) {
+					notifyPairingHintShown = true
+					uni.showModal({
+						title: '需要配对',
+						content: '设备要求加密连接，请在手机弹窗中确认配对，或到系统蓝牙中配对后重试。',
+						showCancel: false,
+					})
+				}
+				if (!pairingTriggered) {
+					pairingTriggered = true
+					triggerPairingByWrite()
+				}
+				if (notifyRetryCount < 15) {
+					notifyRetryCount++
+					scheduleSubscribeRetry(900)
+				}
+				return
+			}
+			if (notifyRetryCount < 8) {
+				notifyRetryCount++
+				scheduleSubscribeRetry(300 + notifyRetryCount * 200)
+			}
+		}
+		const doEnable = () => {
+			uni.notifyBLECharacteristicValueChange({
+				deviceId: deviceId.value,
+				serviceId: activeServiceId,
+				characteristicId: activeNotifyCharId,
+				state: true,
+				success: () => {
+					onSuccess()
+				},
+				fail: (err) => {
+					onFail(err)
+				},
+			})
+		}
+		if (notifyRetryCount > 0) {
+			subscribeNotifyInternal(false, () => {
+				setTimeout(() => {
+					if (deviceId.value.length == 0) {
+						return
+					}
+					doEnable()
+				}, 120)
+			})
+		} else {
+			doEnable()
+		}
+	}
+
+	function prepareFixedProfileThenSubscribe() {
+		activeServiceId = BLE_SERVICE_ID
+		activeNotifyCharId = BLE_NOTIFY_CHAR_ID
+		activeWriteCharId = BLE_WRITE_CHAR_ID
+		uni.getBLEDeviceCharacteristics({
+			deviceId: deviceId.value,
+			serviceId: BLE_SERVICE_ID,
+			success: (res) => {
+				let foundNotify = false
+				const list = res.characteristics
+				for (let i = 0; i < list.length; i++) {
+					const c = list[i]
+					const cid = c.uuid as string
+					if (uuidEquals(cid, BLE_NOTIFY_CHAR_ID)) {
+						const p = c.properties
+						if (p.notify || p.indicate) {
+							foundNotify = true
+						}
+					}
+				}
+				if (!foundNotify) {
+					bleStatusText.value = '设备特征与程序不匹配'
+					uni.showToast({ title: '未找到通知特征', icon: 'none' })
+					return
+				}
+				bleStatusText.value = '正在订阅通知…'
+				setTimeout(() => {
+					if (deviceId.value.length == 0) {
+						return
+					}
+					subscribeNotify()
+				}, 450)
+			},
+			fail: (e) => {
+				console.error('re get characteristics fail', e)
+				setTimeout(() => {
+					if (deviceId.value.length == 0) {
+						return
+					}
+					subscribeNotify()
+				}, 450)
+			},
+		})
+	}
+
+	function trySubscribeAfterConnect() {
+		uni.getBLEDeviceServices({
+			deviceId: deviceId.value,
+			success: (res) => {
+				let hasTarget = false
+				const services = res.services
+				for (let i = 0; i < services.length; i++) {
+					if (uuidEquals(services[i].uuid as string, BLE_SERVICE_ID)) {
+						hasTarget = true
+						break
+					}
+				}
+				if (hasTarget) {
+					prepareFixedProfileThenSubscribe()
+					return
+				}
+				bleStatusText.value = '未找到仪器服务'
+				uni.showToast({ title: '未找到 B810 服务', icon: 'none' })
+			},
+			fail: (e) => {
+				console.error('re get services', e)
+				bleStatusText.value = '读取服务失败'
+			},
+		})
+	}
+
+	function onBleCharacteristicValueChange(res: OnBLECharacteristicValueChangeSuccess) {
+		if (res.deviceId != deviceId.value) {
+			return
+		}
+		const cid = res.characteristicId as string
+		if (!uuidEquals(cid, activeNotifyCharId)) {
+			return
+		}
+		const t = parseNotifyToText(res.value)
+		if (t.length == 0) {
+			return
+		}
+		const parsed = parseHdateLine(t)
+		if (parsed != null) {
+			latestDataMem = parsed
+			latestRawMem = t
+			handleRecordState(parsed)
+			return
+		}
+	}
+
+	function onBluetoothDeviceFoundCb(res: OnBluetoothDeviceFoundResult) {
+		if (deviceId.value.length > 0) {
+			return
+		}
+		const list = res.devices
+		for (let i = 0; i < list.length; i++) {
+			const d = list[i]
+			const n = d.name != null ? d.name as string : ''
+			if (n.length == 0) {
+				continue
+			}
+			if (!deviceNameMatch(n)) {
+				continue
+			}
+			connectToId(d.deviceId, n)
+			return
+		}
+	}
+
+	function ensureBleListeners() {
+		if (bleListenersReady) {
+			return
+		}
+		bleListenersReady = true
+		uni.onBLECharacteristicValueChange(onBleCharacteristicValueChange)
+		uni.onBluetoothDeviceFound(onBluetoothDeviceFoundCb)
+	}
+
+	function connectToId(id: string, detectedName: string = '') {
+		teardownBle()
+		deviceId.value = id
+		if (detectedName.length > 0) {
+			deviceName.value = detectedName
+		}
+		syncBleToSession()
+		bleStatusText.value = '连接中…'
+		uni.createBLEConnection({
+			deviceId: id,
+			success: () => {
+				stopDiscoverySafe()
+				trySubscribeAfterConnect()
+			},
+			fail: (e) => {
+				console.error('re connect fail', e)
+				deviceId.value = ''
+				syncBleToSession()
+				bleStatusText.value = '连接失败'
+				uni.showToast({ title: '连接失败', icon: 'none' })
+			},
+		})
+	}
+
+	function deviceNameMatch(name: string): boolean {
+		if (nameFilter.length == 0) {
+			return true
+		}
+		return name.indexOf(nameFilter) >= 0
+	}
+
+	function parseIntSafe(text: string): number {
+		const v = parseInt(text)
+		// @ts-ignore
+		if (isNaN(v)) {
+			return 0
+		}
+		return v
+	}
+
+	function parseHdateLine(line: string): HdModel | null {
+		const pre = '+HDATE:'
+		const t = line.trim()
+		if (t.length < pre.length || t.substring(0, pre.length) != pre) {
+			return null
+		}
+		const body = t.substring(pre.length).trim()
+		const parts = body.split(',')
+		if (parts.length < 9) {
+			return null
+		}
+		let base = 0
+		let component = uiComponentId.value
+		if (parts.length >= 10) {
+			component = parts[0].trim()
+			base = 1
+		}
+		if (component.length == 0) {
+			component = '--'
+		}
+		if (parts.length < base + 9) {
+			return null
+		}
+		const off = parseIntSafe(parts[base].trim())
+		const st = parseIntSafe(parts[base + 1].trim())
+		const pos = parseIntSafe(parts[base + 2].trim())
+		const r1i = parseIntSafe(parts[base + 3].trim())
+		const r1p = parseIntSafe(parts[base + 4].trim())
+		const r1t = parseIntSafe(parts[base + 5].trim())
+		const r2i = parseIntSafe(parts[base + 6].trim())
+		const r2p = parseIntSafe(parts[base + 7].trim())
+		const r2t = parseIntSafe(parts[base + 8].trim())
+		return {
+			componentId: component,
+			offset: off,
+			status: st,
+			currentPosition: pos,
+			rebar1: { index: r1i, position: r1p, thickness: r1t },
+			rebar2: { index: r2i, position: r2p, thickness: r2t },
+		}
+	}
+
+	function isValidRebar(rebar: HdRebar): boolean {
+		return rebar.index > 0 && rebar.position > 0 && rebar.thickness > 0
+	}
+
+	function pickCurrentRebar(data: HdModel): HdRebar | null {
+		const v1 = isValidRebar(data.rebar1)
+		const v2 = isValidRebar(data.rebar2)
+		if (!v1 && !v2) {
+			return null
+		}
+		if (v1 && !v2) {
+			return data.rebar1
+		}
+		if (!v1 && v2) {
+			return data.rebar2
+		}
+		const d1 = Math.abs(data.rebar1.position - data.currentPosition)
+		const d2 = Math.abs(data.rebar2.position - data.currentPosition)
+		if (d1 <= d2) {
+			return data.rebar1
+		}
+		return data.rebar2
+	}
+
+	function handleRecordState(data: HdModel) {
+		const nearCenter = data.status == 1 && Math.abs(data.offset) <= ALIGN_THRESHOLD
+		const current = pickCurrentRebar(data)
+		if (recordState == 'waiting') {
+			if (!nearCenter || current == null) {
+				return
+			}
+			const key = `${current.index}_${current.position}_${current.thickness}`
+			if (key == lastRecordKey) {
+				return
+			}
+			let spacing = '无'
+			if (recordMem.length > 0) {
+				const prev = recordMem[recordMem.length - 1]
+				spacing = `${Math.abs(current.position - prev.position)}`
+			}
+			recordMem.push({
+				index: current.index,
+				position: current.position,
+				thickness: current.thickness,
+				spacing: spacing,
+			})
+			lastRecordKey = key
+			recordState = 'locked'
+			lockedIndex = current.index
+			lockPosition = data.currentPosition
+			return
+		}
+		const movedAway = Math.abs(data.currentPosition - lockPosition) > RELEASE_DISTANCE
+		const offsetAway = Math.abs(data.offset) > ALIGN_THRESHOLD * 2
+		const statusAway = data.status == 0
+		const changed = current != null && current.index != lockedIndex
+		if (movedAway || offsetAway || statusAway || changed) {
+			recordState = 'waiting'
+		}
+	}
+
+	function buildHint(data: HdModel): string {
+		if (data.status == 1 && Math.abs(data.offset) <= ALIGN_THRESHOLD) {
+			return '已对准钢筋中心'
+		}
+		if (data.offset > ALIGN_THRESHOLD) {
+			return '向右移动'
+		}
+		if (data.offset < -ALIGN_THRESHOLD) {
+			return '向左移动'
+		}
+		if (data.status == 0) {
+			return '正在搜索钢筋'
+		}
+		return '微调位置'
+	}
+
+	function flushUiFromMem() {
+		const data = latestDataMem
+		if (data == null) {
+			return
+		}
+		uiComponentId.value = data.componentId
+		uiOffset.value = `${data.offset}`
+		uiStatus.value = `${data.status}`
+		uiCurrentPosition.value = `${data.currentPosition}`
+		const current = pickCurrentRebar(data)
+		if (current == null) {
+			uiThickness.value = '无'
+		} else {
+			uiThickness.value = `${current.thickness}`
+		}
+		uiHint.value = buildHint(data)
+		uiLastRaw.value = latestRawMem
+		uiRecords.value = recordMem.slice(0)
+	}
+
+	function startUiFlushLoop() {
+		if (uiFlushTimer >= 0) {
+			clearInterval(uiFlushTimer)
+			uiFlushTimer = -1
+		}
+		uiFlushTimer = setInterval(() => {
+			flushUiFromMem()
+		}, UI_REFRESH_MS)
+	}
+
+	function thicknessValueAt(barIndex: number): string {
+		if (barIndex >= 0 && barIndex < uiRecords.value.length) {
+			return `${uiRecords.value[barIndex].thickness}`
+		}
+		if (barIndex >= 0 && barIndex < previewThickness.length) {
+			return previewThickness[barIndex]
+		}
+		return '--'
+	}
+
+	function thicknessTextAt(barIndex: number): string {
+		const v = thicknessValueAt(barIndex)
+		return `${v} mm`
+	}
+
+	function barGlobalIndex(sectionIndex: number, barSlot: number): number {
+		return sectionIndex * BARS_PER_SECTION + barSlot
+	}
+
+	function barDisplayIndex(sectionIndex: number, barSlot: number): string {
+		return `${barGlobalIndex(sectionIndex, barSlot) + 1}`
+	}
+
+	function thicknessDisplayText(sectionIndex: number, barSlot: number): string {
+		return thicknessTextAt(barGlobalIndex(sectionIndex, barSlot))
+	}
+
+	function distanceDisplayValue(sectionIndex: number, pairSlot: number): string {
+		return distanceValueAt(sectionIndex * (BARS_PER_SECTION - 1) + pairSlot)
+	}
+
+	function distanceValueAt(pairIndex: number): string {
+		const left = pairIndex
+		const right = pairIndex + 1
+		if (right < uiRecords.value.length) {
+			const r = uiRecords.value[right]
+			if (r.spacing.length > 0 && r.spacing != '无') {
+				return `${r.spacing}`
+			}
+			const l = uiRecords.value[left]
+			return `${Math.abs(r.position - l.position)}`
+		}
+		if (pairIndex >= 0 && pairIndex < previewDistance.length) {
+			return previewDistance[pairIndex]
+		}
+		return '--'
+	}
+
+	function startAutoDiscovery() {
+		// #ifdef MP-WEIXIN
+		uni.startBluetoothDevicesDiscovery({
+			allowDuplicatesKey: false,
+			success: () => {
+				discoveryPermissionDenied = false
+				discoveryPermissionTipShown = false
+				discoveryStarted = true
+				bleStatusText.value = '扫描中…'
+			},
+			fail: (e) => {
+				console.error('re discovery', e)
+				const msg = `${e.errMsg}`
+				if (msg.indexOf('location permission is denied') >= 0) {
+					discoveryPermissionDenied = true
+					bleStatusText.value = '缺少定位权限'
+					if (!discoveryPermissionTipShown) {
+						discoveryPermissionTipShown = true
+						uni.showToast({ title: '请允许定位权限后重试', icon: 'none' })
+					}
+					return
+				}
+				uni.showToast({ title: '扫描失败', icon: 'none' })
+			},
+		})
+		// #endif
+	}
+
+	function requestLocationPermissionAndDiscover() {
+		// #ifdef MP-WEIXIN
+		uni.authorize({
+			scope: 'scope.userLocation',
+			success: () => {
+				discoveryPermissionDenied = false
+				startAutoDiscovery()
+			},
+			fail: () => {
+				discoveryPermissionDenied = true
+				bleStatusText.value = '缺少定位权限'
+				uni.showToast({ title: '请在设置中允许定位权限', icon: 'none' })
+			},
+		})
+		// #endif
+	}
+
+	function openBleAndAutoConnect() {
+		// #ifdef MP-WEIXIN
+		uni.openBluetoothAdapter({
+			success: () => {
+				ensureBleListeners()
+				requestLocationPermissionAndDiscover()
+			},
+			fail: (e) => {
+				console.error('re open adapter', e)
+				bleStatusText.value = '请打开手机蓝牙'
+				uni.showToast({ title: '请先开启蓝牙', icon: 'none' })
+			},
+		})
+		// #endif
+		// #ifndef MP-WEIXIN
+		uni.showToast({ title: '请在微信小程序中测试蓝牙', icon: 'none' })
+		// #endif
+	}
+
+	function onDeviceClick() {
+		// #ifdef MP-WEIXIN
+		if (discoveryPermissionDenied) {
+			uni.openSetting({
+				success: () => {
+					discoveryPermissionDenied = false
+					discoveryPermissionTipShown = false
+					openBleAndAutoConnect()
+				},
+			})
+			return
+		}
+		openBleAndAutoConnect()
+		// #endif
+		// #ifndef MP-WEIXIN
+		uni.showToast({ title: '蓝牙仅支持微信小程序', icon: 'none' })
+		// #endif
+	}
+
+	function onSubmit() {
+		const payload = {
+			content: contentLabel,
+			instrument: instrumentLabel,
+			latestData: latestDataMem,
+			records: recordMem,
+		}
+		console.log('reinforcement submit', payload)
+		uni.showToast({ title: '已提交', icon: 'success' })
+	}
+
+	onLoad(() => {
+		nameFilter = TARGET_NAME_KEY
+		startUiFlushLoop()
+	})
+
+	onShow(() => {
+		// #ifdef MP-WEIXIN
+		if (!bleConnected.value && !discoveryPermissionDenied) {
+			openBleAndAutoConnect()
+		}
+		// #endif
+	})
+
+	onUnload(() => {
+		if (uiFlushTimer >= 0) {
+			clearInterval(uiFlushTimer)
+			uiFlushTimer = -1
+		}
+		// #ifdef MP-WEIXIN
+		teardownBle()
+		if (bleListenersReady) {
+			uni.offBluetoothDeviceFound(onBluetoothDeviceFoundCb)
+			bleListenersReady = false
+		}
+		uni.closeBluetoothAdapter({ complete: () => {} })
+		// #endif
+	})
+</script>
+
+<style>
+	.page-scroll {
+		flex: 1;
+		height: 100vh;
+		background-color: #f5f6f8;
+	}
+
+	.section {
+		padding: 24rpx 32rpx;
+	}
+
+	.hint {
+		padding-top: 8rpx;
+		padding-bottom: 4rpx;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.hint-text {
+		font-size: 24rpx;
+		color: #666;
+		line-height: 1.5;
+		text-align: center;
+	}
+
+	.actions {
+		flex-direction: row;
+		justify-content: center;
+		align-items: center;
+		padding-top: 8rpx;
+		padding-bottom: 8rpx;
+	}
+
+	.action-circle {
+		flex-direction: column;
+		align-items: center;
+		width: 280rpx;
+	}
+
+	.device-icon-wrap {
+		width: 160rpx;
+		height: 160rpx;
+		border-radius: 80rpx;
+		background-color: #e8ecf1;
+		align-items: center;
+		justify-content: center;
+		border-width: 4rpx;
+		border-style: solid;
+		border-color: transparent;
+	}
+
+	.device-icon-wrap.connected {
+		border-color: #007aff;
+		background-color: #f0f6ff;
+	}
+
+	.device-emoji {
+		font-size: 64rpx;
+	}
+
+	.action-label {
+		margin-top: 16rpx;
+		font-size: 26rpx;
+		color: #333;
+	}
+
+	.status-text {
+		margin-top: 8rpx;
+		font-size: 22rpx;
+		color: #888;
+	}
+
+	.form-block {
+		background-color: #fff;
+		border-radius: 16rpx;
+		margin-left: 24rpx;
+		margin-right: 24rpx;
+		padding: 0 24rpx;
+	}
+
+	.form-row {
+		flex-direction: row;
+		align-items: center;
+		padding: 28rpx 0;
+		border-bottom-width: 1rpx;
+		border-bottom-style: solid;
+		border-bottom-color: #eee;
+	}
+
+	.form-row-last:last-child {
+		border-bottom-width: 0;
+	}
+
+	.form-label {
+		font-size: 28rpx;
+		color: #333;
+		width: 200rpx;
+	}
+
+	.form-value {
+		flex: 1;
+		font-size: 28rpx;
+		color: #333;
+		text-align: right;
+	}
+
+	.block-title {
+		font-size: 30rpx;
+		color: #333;
+		font-weight: bold;
+		margin-bottom: 12rpx;
+	}
+
+	.sketch-title-wrap {
+		margin-left: 24rpx;
+		margin-right: 24rpx;
+		margin-top:24rpx;
+		padding-top: 8rpx;
+		padding-left: 8rpx;
+	}
+
+	.sketch-block {
+		background-color: #fff;
+		border-radius: 16rpx;
+		margin-left: 24rpx;
+		margin-right: 24rpx;
+		margin-top:10rpx;
+		padding: 16rpx 24rpx;
+	}
+
+	.sketch-sub-block {
+		margin-top: 24rpx;
+	}
+
+	.sketch-sub-block:first-child {
+		margin-top: 0;
+	}
+
+	.rt-raw {
+		margin-top: 12rpx;
+		font-size: 22rpx;
+		color: #888;
+		line-height: 1.4;
+	}
+
+	.scan-visual-wrap {
+		position: relative;
+	}
+
+	.scan-center-line {
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 108rpx;
+		height: 2rpx;
+		background-color: #ef4b56;
+	}
+
+	.scan-top-row {
+		flex-direction: row;
+		align-items: flex-end;
+		padding-top: 16rpx;
+		padding-bottom: 12rpx;
+		width: 100%;
+		justify-content: flex-start;
+	}
+
+	.scan-bar-cell {
+		width: 16%;
+		align-items: center;
+	}
+
+	.scan-index {
+		font-size: 24rpx;
+		color: #555;
+		margin-bottom: 8rpx;
+	}
+
+	.scan-bar {
+		width: 18rpx;
+		height: 132rpx;
+		border-radius: 4rpx;
+		background-color: #9aa0a6;
+	}
+
+	.scan-gap-cell {
+		width: 12%;
+		align-items: center;
+		justify-content: center;
+		margin-bottom: 74rpx;
+	}
+
+	.scan-gap-value {
+		font-size: 20rpx;
+		color: #333;
+		margin-bottom: 2rpx;
+		white-space: nowrap;
+		line-height: 1;
+	}
+
+	.scan-gap-arrow {
+		font-size: 44rpx;
+		line-height: 1;
+		color: #ef4b56;
+	}
+
+	.scan-gap-title {
+		font-size: 22rpx;
+		color: #666;
+	}
+
+	.scan-thickness-row {
+		flex-direction: row;
+		align-items: center;
+		width: 100%;
+		padding-top: 8rpx;
+		justify-content: space-between;
+	}
+
+	.scan-bottom-bar-space {
+		width: 16%;
+	}
+
+	.scan-bottom-gap {
+		width: 12%;
+		align-items: center;
+	}
+
+	.scan-thk-wrap {
+		flex-direction: row;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		overflow: visible;
+	}
+
+	.scan-thk-box {
+		width: 96rpx;
+		height: 44rpx;
+		border-width: 1rpx;
+		border-style: solid;
+		border-color: #bdbdbd;
+		border-radius: 4rpx;
+		align-items: center;
+		justify-content: center;
+		background-color: #f7f7f7;
+	}
+
+	.scan-thk-val {
+		font-size: 22rpx;
+		color: #333;
+	}
+
+	.result-empty {
+		padding-top: 20rpx;
+		padding-bottom: 6rpx;
+		font-size: 24rpx;
+		color: #888;
+		text-align: center;
+	}
+
+	.submit-btn {
+		margin: 32rpx 24rpx 0 24rpx;
+		background-color: #007aff;
+		border-radius: 8rpx;
+		font-size: 32rpx;
+	}
+
+	.bottom-space {
+		height: 48rpx;
+	}
+</style>

@@ -1,0 +1,88 @@
+<template>
+	<!--
+	  1.模板语法
+	  2.数据绑定
+	  3.条件判断  某一块元素是否要渲染
+	  4. 列表渲染
+	  5. 基础组件使用
+	  6.自定义组件的使用
+	  7.基础api的用法-- 蓝牙
+	  9.条件编译
+	  10.页面布局
+	<strong></strong>
+	-->
+	<!--
+	v-bind--- ：
+	v-on：---@	
+	-->
+	<!--
+	//模板语法，数据绑定
+	<view class='content' :class="className" @click="open">
+	{{title}}
+	</view>
+	
+	-->
+	<!--基础组件的使用-->
+	<view>
+		<button type="detail" @click="input">点击</button>
+		<btn color="red" @change="change">按钮</btn>
+		<input type="text" v-model="value"/>
+		<view>
+			value当前的值是:{{value}}
+		</view>
+		
+	</view>
+
+
+
+</template>value
+
+<script>
+	import btn from '@/components/btn.vue';
+	export default {
+		// 初始化数据方法
+		components:{
+			btn
+		},
+		data() {
+			return {				
+				value:'value'			
+			}
+		},
+		onLoad() {
+			uni.getSystemInfo({
+				success(res){
+					console.log((res));
+				},
+				fail(err){
+					console.log(err);
+				},complete(res){
+					console.log('无论成功失败都返回',res);
+				}
+			})
+		},
+
+		methods: {
+			open() {
+
+			},
+			onScroll(e) {
+
+			},
+			input(){
+				
+			},
+	        change(){
+				console.log('eee')
+			}
+
+		}
+	}
+</script>sho
+
+<style>
+	.height {
+		height: 500px;
+		border: 1px red solid;
+	}
+</style>

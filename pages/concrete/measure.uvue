@@ -1,0 +1,206 @@
+<template>
+	<scroll-view class="page-scroll" scroll-y="true">
+		<view class="section">
+			<text class="area-hint">开始采集后从测区1数值1起按顺序自动填入；仍可先点格子改当前写入位置</text>
+			<button class="carbon-btn" type="default" @click="onSendCarbonization">下发碳化到仪器</button>
+			<text class="carbon-hint">从测区1起连续填写平均碳化（mm），填了几个就下发几个；无需填满 10 个测区。保持首页蓝牙已连接。</text>
+		</view>
+		<view class="section" v-for="(area, ai) in areas" :key="ai">
+			<text class="area-title">测量区{{ ai + 1 }}</text>
+			<view class="tanhua-row">
+				<text class="tanhua-label">平均碳化(mm)</text>
+				<input
+					class="tanhua-input"
+					type="text"
+					:value="areaCarbonization[ai]"
+					placeholder="如 0.0"
+					@input="onTanhuaAreaInput(ai, $event)"
+				/>
+			</view>
+			<view class="grid">
+				<view
+					v-for="(_v, si) in area.values"
+					:key="si"
+					class="cell"
+					:class="{ active: activeAreaIndex == ai && activeSlotIndex == si }"
+					@click="selectCell(ai, si)"
+				>
+					<text class="cell-label">数值{{ si + 1 }}</text>
+					<text class="cell-value">{{ area.values[si].length > 0 ? area.values[si] : ' ' }}</text>
+				</view>
+			</view>
+		</view>
+		<button class="submit-btn" type="primary" @click="onSubmit">提交</button>
+		<view class="bottom-space" />
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import {
+		areas,
+		activeAreaIndex,
+		activeSlotIndex,
+		selectCell,
+		areaCarbonization,
+		setAreaCarbonization,
+		sessionSendSetHth,
+		contentOptions,
+		instrumentOptions,
+		contentIndex,
+		instrumentIndex,
+		photoPath,
+		htWeituo,
+		htGoujian,
+		htCequ,
+		htQuxian,
+		htLeixingDisp,
+		htBengsongDisp,
+		htCemianDisp,
+		htJiaodu,
+		htFangfaDisp,
+	} from '../../common/concreteSession.uts'
+
+	function onTanhuaAreaInput(ai: number, e: UniInputEvent) {
+		setAreaCarbonization(ai, e.detail.value as string)
+	}
+
+	function onSendCarbonization() {
+		sessionSendSetHth()
+	}
+
+	function onSubmit() {
+		const payload = {
+			content: contentOptions[contentIndex.value],
+			instrument: instrumentOptions[instrumentIndex.value],
+			photo: photoPath.value,
+			deviceHtPara: {
+				weituo: htWeituo.value,
+				goujian: htGoujian.value,
+				cequ: htCequ.value,
+				quxian: htQuxian.value,
+				leixing: htLeixingDisp.value,
+				bengsong: htBengsongDisp.value,
+				cemian: htCemianDisp.value,
+				jiaodu: htJiaodu.value,
+				fangfa: htFangfaDisp.value,
+			},
+			areas: areas.value,
+		}
+		console.log('submit', payload)
+		uni.showToast({ title: '已保存', icon: 'success' })
+		uni.navigateTo({
+			url: '/pages/concrete/summary',
+			fail: (e) => {
+				console.error('navigate summary', e)
+				uni.showToast({ title: '打开汇总页失败', icon: 'none' })
+			},
+		})
+	}
+</script>
+
+<style>
+	.page-scroll {
+		flex: 1;
+		height: 100vh;
+		background-color: #f5f6f8;
+	}
+
+	.section {
+		padding: 24rpx 32rpx;
+	}
+
+	.area-hint {
+		font-size: 24rpx;
+		color: #666;
+	}
+
+	.carbon-btn {
+		margin-top: 20rpx;
+		font-size: 28rpx;
+		border-radius: 8rpx;
+	}
+
+	.carbon-hint {
+		margin-top: 12rpx;
+		font-size: 22rpx;
+		color: #888;
+		line-height: 1.4;
+	}
+
+	.tanhua-row {
+		flex-direction: row;
+		align-items: center;
+		margin-bottom: 16rpx;
+		padding: 12rpx 16rpx;
+		background-color: #fff;
+		border-radius: 8rpx;
+	}
+
+	.tanhua-label {
+		font-size: 26rpx;
+		color: #555;
+		width: 200rpx;
+	}
+
+	.tanhua-input {
+		flex: 1;
+		font-size: 28rpx;
+		padding: 8rpx 12rpx;
+		background-color: #f0f2f5;
+		border-radius: 6rpx;
+	}
+
+	.area-title {
+		font-size: 28rpx;
+		color: #333;
+		font-weight: bold;
+		margin-bottom: 16rpx;
+	}
+
+	.grid {
+		flex-direction: row;
+		flex-wrap: wrap;
+		justify-content: space-between;
+	}
+
+	.cell {
+		width: 22%;
+		margin-bottom: 20rpx;
+		padding: 16rpx 8rpx;
+		background-color: #e8ecf1;
+		border-radius: 8rpx;
+		border-width: 2rpx;
+		border-style: solid;
+		border-color: transparent;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.cell.active {
+		border-color: #007aff;
+		background-color: #f0f6ff;
+	}
+
+	.cell-label {
+		font-size: 22rpx;
+		color: #888;
+	}
+
+	.cell-value {
+		margin-top: 8rpx;
+		font-size: 28rpx;
+		color: #333;
+		font-weight: bold;
+	}
+
+	.submit-btn {
+		margin: 32rpx 24rpx 0 24rpx;
+		background-color: #007aff;
+		border-radius: 8rpx;
+		font-size: 32rpx;
+	}
+
+	.bottom-space {
+		height: 48rpx;
+	}
+</style>

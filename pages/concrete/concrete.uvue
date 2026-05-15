@@ -1,0 +1,995 @@
+<template>
+	<scroll-view class="page-scroll" scroll-y="true">
+		<view class="section hint">
+			<text class="hint-text">（打开蓝牙后，点击混凝土图标进行设备连接）</text>
+		</view>
+
+		<view class="section actions">
+			<view class="action-circle" @click="onDeviceAreaClick">
+				<view class="device-icon-wrap" :class="{ connected: bleConnected }">
+					<text class="device-emoji">🔨</text>
+				</view>
+				<text class="action-label">混凝土强度</text>
+				<text class="status-text">{{ bleStatusText }}</text>
+			</view>
+		</view>
+
+		<view class="section form-block">
+			<picker mode="selector" :range="contentOptions" :value="contentIndex" @change="onContentPick">
+				<view class="form-row">
+					<text class="form-label">测量内容</text>
+					<text class="form-value">{{ contentOptions[contentIndex] }}</text>
+					<text class="chev">›</text>
+				</view>
+			</picker>
+			<picker mode="selector" :range="instrumentOptions" :value="instrumentIndex" @change="onInstrumentPick">
+				<view class="form-row">
+					<text class="form-label">测量仪器</text>
+					<text class="form-value">{{ instrumentOptions[instrumentIndex] }}</text>
+					<text class="chev">›</text>
+				</view>
+			</picker>
+		</view>
+
+		<view class="section config-panel">
+			<view class="config-head row-between">
+				<text class="config-title">仪器配置（读取参数）</text>
+				<button class="config-fetch" type="default" size="mini" @click="fetchDeviceHtPara">读取配置</button>
+			</view>
+			<text v-if="htParaError.length > 0" class="config-err">{{ htParaError }}</text>
+			<text v-if="htParaHint.length > 0 && htParaError.length == 0" class="config-hint">{{ htParaHint }}</text>
+			<view class="config-row">
+				<text class="cfg-label">委托</text>
+				<text class="cfg-value">{{ htWeituo }}</text>
+			</view>
+			<view class="config-row">
+				<text class="cfg-label">构件</text>
+				<text class="cfg-value">{{ htGoujian }}</text>
+			</view>
+			<view class="config-row">
+				<text class="cfg-label">测区</text>
+				<text class="cfg-value">{{ htCequ }}</text>
+			</view>
+			<view class="config-row">
+				<text class="cfg-label">曲线</text>
+				<text class="cfg-value">{{ htQuxian }}</text>
+			</view>
+			<view class="config-row">
+				<text class="cfg-label">类型</text>
+				<text class="cfg-value">{{ htLeixingDisp }}</text>
+			</view>
+			<view class="config-row">
+				<text class="cfg-label">泵送</text>
+				<text class="cfg-value">{{ htBengsongDisp }}</text>
+			</view>
+			<view class="config-row">
+				<text class="cfg-label">侧面</text>
+				<text class="cfg-value">{{ htCemianDisp }}</text>
+			</view>
+			<view class="config-row">
+				<text class="cfg-label">角度</text>
+				<text class="cfg-value">{{ htJiaodu }}</text>
+			</view>
+			<view class="config-row">
+				<text class="cfg-label">方法</text>
+				<text class="cfg-value">{{ htFangfaDisp }}</text>
+			</view>
+		</view>
+
+		<button class="submit-btn" type="primary" @click="onStartCollect">开始采集</button>
+		<view class="bottom-space" />
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import {
+		setActiveValue,
+		resetMeasureCursorToFirst,
+		advanceMeasureCursorAfterRebound,
+		contentOptions,
+		instrumentOptions,
+		contentIndex,
+		instrumentIndex,
+		htWeituo,
+		htGoujian,
+		htCequ,
+		htQuxian,
+		htLeixingDisp,
+		htBengsongDisp,
+		htCemianDisp,
+		htJiaodu,
+		htFangfaDisp,
+		sessionDeviceId,
+		sessionBleReady,
+		sessionServiceId,
+		sessionWriteCharId,
+		tryApplyGetHtLdFromText,
+		tryApplySetHthFromText,
+	} from '../../common/concreteSession.uts'
+	import {
+		CMD_GETHTPARA,
+		CMD_SAMPSTART,
+		TAG_GETHTPARA,
+		hcCommandToBuffer,
+	} from '../../common/bleCommands.uts'
+
+	function syncBleToSession() {
+		sessionDeviceId.value = deviceId.value
+		sessionBleReady.value = bleConnected.value
+		sessionServiceId.value = activeServiceId
+		sessionWriteCharId.value = activeWriteCharId
+	}
+
+	const bleConnected = ref(false)
+	const bleStatusText = ref('未连接')
+	const deviceId = ref('')
+	let nameFilter = ''
+
+	let bleTextRxBuffer = ''
+
+	const htParaError = ref('')
+	const htParaHint = ref('连接成功后自动拉取；可手动点「读取配置」')
+
+	/** HT225J：自定义服务 + 通知 / 写；GAP 仅读设备名 */
+	const TARGET_NAME_KEY = 'HT225J'
+	const BLE_SERVICE_ID = 'B810093A-9130-B955-2BA1-29A9807C0F69'
+	const BLE_NOTIFY_CHAR_ID = '00008001-0000-1000-8000-00805F9B34FB'
+	const BLE_WRITE_CHAR_ID = '00008002-0000-1000-8000-00805F9B34FB'
+	const BLE_GAP_SERVICE_ID = '00001800-0000-1000-8000-00805F9B34FB'
+	const BLE_GAP_DEVICE_NAME_CHAR_ID = '00002A00-0000-1000-8000-00805F9B34FB'
+	let activeServiceId = BLE_SERVICE_ID
+	let activeNotifyCharId = BLE_NOTIFY_CHAR_ID
+	let activeWriteCharId = BLE_WRITE_CHAR_ID
+
+	let discoveryStarted = false
+	let bleListenersReady = false
+	let discoveryPermissionDenied = false
+	let discoveryPermissionTipShown = false
+	let notifyRetryCount = 0
+	let notifyRetryTimer = -1
+	let pairingTriggered = false
+	let notifyPairingHintShown = false
+
+	function pickerIndexFromEvent(ev: UniPickerChangeEvent): number {
+		const raw = ev.detail.value
+		const n = parseInt(`${raw}`)
+		if (isNaN(n) || n < 0) {
+			return 0
+		}
+		return n
+	}
+
+	function onContentPick(e: UniPickerChangeEvent) {
+		contentIndex.value = pickerIndexFromEvent(e)
+	}
+
+	function onInstrumentPick(e: UniPickerChangeEvent) {
+		instrumentIndex.value = pickerIndexFromEvent(e)
+	}
+
+	function splitParaCsv(line: string): Array<string> {
+		const out = new Array<string>()
+		let cur = ''
+		for (let i = 0; i < line.length; i++) {
+			const ch = line.charAt(i)
+			if (ch == ',') {
+				out.push(cur)
+				cur = ''
+			} else {
+				cur += ch
+			}
+		}
+		out.push(cur)
+		return out
+	}
+
+	function applyGetHtParaLine(line: string) {
+		const pos = line.indexOf(TAG_GETHTPARA)
+		if (pos < 0) {
+			return
+		}
+		let payload = line.substring(pos + TAG_GETHTPARA.length).trim()
+		const sp = payload.indexOf(' //')
+		if (sp >= 0) {
+			payload = payload.substring(0, sp).trim()
+		}
+		const parts = splitParaCsv(payload)
+		const pick = (idx: number): string => {
+			if (idx < parts.length && parts[idx].length > 0) {
+				return parts[idx]
+			}
+			return '--'
+		}
+		if (parts.length >= 1) {
+			htWeituo.value = pick(0)
+		}
+		if (parts.length >= 2) {
+			htGoujian.value = pick(1)
+		}
+		if (parts.length >= 3) {
+			htCequ.value = pick(2)
+		}
+		if (parts.length >= 4) {
+			htQuxian.value = pick(3)
+		}
+		if (parts.length >= 5) {
+			htLeixingDisp.value = pick(4)
+		}
+		if (parts.length >= 6) {
+			htBengsongDisp.value = pick(5)
+		}
+		if (parts.length >= 7) {
+			htCemianDisp.value = pick(6)
+		}
+		if (parts.length >= 8) {
+			htJiaodu.value = pick(7)
+		}
+		if (parts.length >= 9) {
+			htFangfaDisp.value = pick(8)
+		}
+		htParaError.value = ''
+		htParaHint.value = '仪器参数已更新'
+	}
+
+	function tryFlushBleHtParaOne(): boolean {
+		const i = bleTextRxBuffer.indexOf(TAG_GETHTPARA)
+		if (i < 0) {
+			if (bleTextRxBuffer.length > 12000) {
+				bleTextRxBuffer = ''
+			}
+			return false
+		}
+		const rest = bleTextRxBuffer.substring(i)
+		let consumedLen = -1
+		const nl = rest.indexOf('\n')
+		if (nl >= 0) {
+			consumedLen = nl + 1
+		} else {
+			// 某些机型/运行时会把 \r\n 吃掉，这里改为按内容完整度判断是否可解析
+			const doneMark = rest.indexOf(' //')
+			if (doneMark >= 0) {
+				consumedLen = rest.length
+			} else {
+				let commaCount = 0
+				for (let k = 0; k < rest.length; k++) {
+					if (rest.charAt(k) == ',') {
+						commaCount++
+					}
+				}
+				// +GETHTPARA 后共 9 段，至少应出现 8 个逗号
+				if (commaCount >= 8) {
+					consumedLen = rest.length
+				} else {
+					return false
+				}
+			}
+		}
+		let line = rest.substring(0, consumedLen)
+		line = line.replace(/\r/g, '').replace(/\n/g, '').trim()
+		bleTextRxBuffer = bleTextRxBuffer.substring(0, i) + bleTextRxBuffer.substring(i + consumedLen)
+		applyGetHtParaLine(line)
+		return true
+
+	}
+
+	function feedBleTextForHtPara(t: string): boolean {
+		bleTextRxBuffer += t
+		let consumed = false
+		while (tryFlushBleHtParaOne()) {
+			consumed = true
+		}
+		if (consumed) {
+			return true
+		}
+		if (bleTextRxBuffer.indexOf(TAG_GETHTPARA) >= 0) {
+			return true
+		}
+		return false
+	}
+
+	function resetHtParaDisplay() {
+		htWeituo.value = '--'
+		htGoujian.value = '--'
+		htCequ.value = '--'
+		htQuxian.value = '--'
+		htLeixingDisp.value = '--'
+		htBengsongDisp.value = '--'
+		htCemianDisp.value = '--'
+		htJiaodu.value = '--'
+		htFangfaDisp.value = '--'
+		htParaError.value = ''
+		htParaHint.value = '连接成功后自动拉取；可手动点「读取配置」'
+		bleTextRxBuffer = ''
+	}
+
+	function parseNotifyToText(buffer: ArrayBuffer): string {
+		const u8 = new Uint8Array(buffer)
+		if (u8.length == 0) {
+			return ''
+		}
+		let s = ''
+		for (let i = 0; i < u8.length; i++) {
+			const c = u8[i]
+			if (c >= 32 && c <= 126) {
+				s += String.fromCharCode(c)
+			}
+		}
+		if (s.length > 0) {
+			return s.trim()
+		}
+		let num = 0
+		for (let i = 0; i < u8.length; i++) {
+			num = (num << 8) | u8[i]
+		}
+		return `${num}`
+	}
+
+	function stopDiscoverySafe() {
+		if (!discoveryStarted) {
+			return
+		}
+		discoveryStarted = false
+		uni.stopBluetoothDevicesDiscovery({
+			complete: () => {},
+		})
+	}
+
+	function teardownBle() {
+		stopDiscoverySafe()
+		if (notifyRetryTimer >= 0) {
+			clearTimeout(notifyRetryTimer)
+			notifyRetryTimer = -1
+		}
+		notifyRetryCount = 0
+		pairingTriggered = false
+		notifyPairingHintShown = false
+		if (deviceId.value.length > 0) {
+			uni.closeBLEConnection({
+				deviceId: deviceId.value,
+				complete: () => {},
+			})
+			deviceId.value = ''
+		}
+		bleConnected.value = false
+		bleStatusText.value = '未连接'
+		activeServiceId = BLE_SERVICE_ID
+		activeNotifyCharId = BLE_NOTIFY_CHAR_ID
+		activeWriteCharId = BLE_WRITE_CHAR_ID
+		resetHtParaDisplay()
+		syncBleToSession()
+	}
+
+	function uuidEquals(a: string, b: string): boolean {
+		return a.toLowerCase() == b.toLowerCase()
+	}
+
+	function readGapDeviceName() {
+		// #ifdef MP-WEIXIN
+		if (deviceId.value.length == 0) {
+			return
+		}
+		uni.readBLECharacteristicValue({
+			deviceId: deviceId.value,
+			serviceId: BLE_GAP_SERVICE_ID,
+			characteristicId: BLE_GAP_DEVICE_NAME_CHAR_ID,
+			success: () => {},
+			fail: (e) => {
+				console.error('read GAP device name', e)
+			},
+		})
+		// #endif
+	}
+
+	function writeBleWithMode(buffer: ArrayBuffer, writeType: string) {
+		// #ifdef MP-WEIXIN
+		uni.writeBLECharacteristicValue({
+			deviceId: deviceId.value,
+			serviceId: activeServiceId,
+			characteristicId: activeWriteCharId,
+			value: buffer,
+			writeType: writeType,
+			success: () => {},
+			fail: (e) => {
+				console.error('writeBLE fail', writeType, e)
+				if (writeType == 'writeNoResponse') {
+					writeBleWithMode(buffer, 'write')
+				} else {
+					uni.showToast({ title: '写入失败', icon: 'none' })
+				}
+			},
+		})
+		// #endif
+	}
+
+	function writeBle(buffer: ArrayBuffer) {
+		// #ifdef MP-WEIXIN
+		if (deviceId.value.length == 0 || !bleConnected.value) {
+			uni.showToast({ title: '请先连接设备', icon: 'none' })
+			return
+		}
+		writeBleWithMode(buffer, 'writeNoResponse')
+		// #endif
+	}
+
+	function fetchDeviceHtPara() {
+		// #ifdef MP-WEIXIN
+		if (!bleConnected.value || deviceId.value.length == 0) {
+			uni.showToast({ title: '请先连接设备', icon: 'none' })
+			return
+		}
+		htParaError.value = ''
+		htParaHint.value = '正在读取…'
+		writeBle(hcCommandToBuffer(CMD_GETHTPARA))
+		// #endif
+	}
+
+	function scheduleSubscribeRetry(delayMs: number) {
+		if (notifyRetryTimer >= 0) {
+			clearTimeout(notifyRetryTimer)
+		}
+		notifyRetryTimer = setTimeout(() => {
+			notifyRetryTimer = -1
+			if (deviceId.value.length == 0) {
+				return
+			}
+			subscribeNotify()
+		}, delayMs)
+	}
+
+	function triggerPairingByWrite() {
+		const buffer = hcCommandToBuffer(CMD_GETHTPARA)
+		const doWrite = (writeType: string) => {
+			uni.writeBLECharacteristicValue({
+				deviceId: deviceId.value,
+				serviceId: activeServiceId,
+				characteristicId: activeWriteCharId,
+				value: buffer,
+				writeType: writeType,
+				success: () => {},
+				fail: () => {
+					if (writeType == 'writeNoResponse') {
+						doWrite('write')
+					}
+				},
+			})
+		}
+		doWrite('writeNoResponse')
+	}
+
+	function subscribeNotify() {
+		uni.notifyBLECharacteristicValueChange({
+			deviceId: deviceId.value,
+			serviceId: activeServiceId,
+			characteristicId: activeNotifyCharId,
+			state: true,
+			success: () => {
+				notifyRetryCount = 0
+				pairingTriggered = false
+				if (notifyRetryTimer >= 0) {
+					clearTimeout(notifyRetryTimer)
+					notifyRetryTimer = -1
+				}
+				bleConnected.value = true
+				bleStatusText.value = '已连接'
+				syncBleToSession()
+				readGapDeviceName()
+				setTimeout(() => {
+					fetchDeviceHtPara()
+				}, 400)
+			},
+			fail: (err) => {
+				console.error('notify fail', err, activeServiceId, activeNotifyCharId)
+				bleStatusText.value = '已连上但未订阅通知'
+				syncBleToSession()
+				const msg = `${err.errMsg}`
+				if (msg.indexOf('Encryption is insufficient') >= 0) {
+					if (!pairingTriggered) {
+						pairingTriggered = true
+						triggerPairingByWrite()
+					}
+					scheduleSubscribeRetry(700)
+					return
+				}
+				if (notifyRetryCount < 3) {
+					notifyRetryCount++
+					scheduleSubscribeRetry(350 * notifyRetryCount)
+				}
+			},
+		})
+	}
+
+	function tryResolveCharsFromService(serviceId: string, done: (ok: boolean) => void) {
+		uni.getBLEDeviceCharacteristics({
+			deviceId: deviceId.value,
+			serviceId: serviceId,
+			success: (res) => {
+				const list = res.characteristics
+				let notifyId = ''
+				let writeId = ''
+				for (let i = 0; i < list.length; i++) {
+					const c = list[i]
+					const cid = c.uuid as string
+					const p = c.properties
+					if (notifyId.length == 0 && (p.notify || p.indicate)) {
+						notifyId = cid
+					}
+					if (writeId.length == 0 && (p.write || p.writeNoResponse)) {
+						writeId = cid
+					}
+				}
+				if (notifyId.length == 0) {
+					done(false)
+					return
+				}
+				activeServiceId = serviceId
+				activeNotifyCharId = notifyId
+				if (writeId.length > 0) {
+					activeWriteCharId = writeId
+				}
+				done(true)
+			},
+			fail: (e) => {
+				console.error('get characteristics fail', serviceId, e)
+				done(false)
+			},
+		})
+	}
+
+	function resolveProfileAndSubscribe(serviceIds: Array<string>, index: number) {
+		if (index >= serviceIds.length) {
+			bleStatusText.value = '未找到可订阅特征'
+			uni.showToast({ title: '未找到可订阅特征', icon: 'none' })
+			return
+		}
+		const sid = serviceIds[index]
+		tryResolveCharsFromService(sid, (ok: boolean) => {
+			if (ok) {
+				subscribeNotify()
+				return
+			}
+			resolveProfileAndSubscribe(serviceIds, index + 1)
+		})
+	}
+
+	function trySubscribeAfterConnect() {
+		uni.getBLEDeviceServices({
+			deviceId: deviceId.value,
+			success: (res) => {
+				const services = res.services
+				let hasTargetService = false
+				const ids = new Array<string>()
+				ids.push(BLE_SERVICE_ID)
+				for (let i = 0; i < services.length; i++) {
+					const sid = services[i].uuid as string
+					if (uuidEquals(sid, BLE_SERVICE_ID)) {
+						hasTargetService = true
+					}
+					if (uuidEquals(sid, BLE_GAP_SERVICE_ID)) {
+						continue
+					}
+					let exists = false
+					for (let j = 0; j < ids.length; j++) {
+						if (uuidEquals(ids[j], sid)) {
+							exists = true
+							break
+						}
+					}
+					if (!exists) {
+						ids.push(sid)
+					}
+				}
+				if (hasTargetService) {
+					// 优先固定的仪器服务/特征，避免误选到其它服务的 notify
+					activeServiceId = BLE_SERVICE_ID
+					activeNotifyCharId = BLE_NOTIFY_CHAR_ID
+					activeWriteCharId = BLE_WRITE_CHAR_ID
+					subscribeNotify()
+					return
+				}
+				console.error('target service not found, fallback dynamic profile')
+				resolveProfileAndSubscribe(ids, 0)
+			},
+			fail: (e) => {
+				console.error('get services', e)
+				bleStatusText.value = '读取服务失败'
+			},
+		})
+	}
+
+	function onBleCharacteristicValueChange(res: OnBLECharacteristicValueChangeSuccess) {
+		if (res.deviceId != deviceId.value) {
+			return
+		}
+		const cid = res.characteristicId as string
+		if (uuidEquals(cid, BLE_GAP_DEVICE_NAME_CHAR_ID)) {
+			const name = parseNotifyToText(res.value)
+			if (name.length > 0) {
+				console.log('GAP Device Name', name)
+			}
+			return
+		}
+		if (!uuidEquals(cid, activeNotifyCharId)) {
+			return
+		}
+		const t = parseNotifyToText(res.value)
+		if (t.length == 0) {
+			return
+		}
+		if (feedBleTextForHtPara(t)) {
+			return
+		}
+		if (tryApplySetHthFromText(t)) {
+			return
+		}
+		if (tryApplyGetHtLdFromText(t)) {
+			return
+		}
+		setActiveValue(t)
+		advanceMeasureCursorAfterRebound()
+	}
+
+	function onBluetoothDeviceFoundCb(res: OnBluetoothDeviceFoundResult) {
+		if (deviceId.value.length > 0) {
+			return
+		}
+		const list = res.devices
+		for (let i = 0; i < list.length; i++) {
+			const d = list[i]
+			const n = d.name != null ? d.name as string : ''
+			if (n.length == 0) {
+				continue
+			}
+			if (!deviceNameMatch(n)) {
+				continue
+			}
+			connectToId(d.deviceId)
+			return
+		}
+	}
+
+	function ensureBleListeners() {
+		if (bleListenersReady) {
+			return
+		}
+		bleListenersReady = true
+		// 监听连接后特征值变化
+		uni.onBLECharacteristicValueChange(onBleCharacteristicValueChange)
+		// 监听扫描阶段发现蓝牙设备
+		uni.onBluetoothDeviceFound(onBluetoothDeviceFoundCb)
+	}
+
+	function connectToId(id: string) {
+		teardownBle()
+		deviceId.value = id
+		syncBleToSession()
+		bleStatusText.value = '连接中…'
+		uni.createBLEConnection({
+			deviceId: id,
+			success: () => {
+				stopDiscoverySafe()
+				trySubscribeAfterConnect()
+			},
+			fail: (e) => {
+				console.error('connect fail', e)
+				deviceId.value = ''
+				syncBleToSession()
+				bleStatusText.value = '连接失败'
+				uni.showToast({ title: '连接失败', icon: 'none' })
+			},
+		})
+	}
+
+	function deviceNameMatch(name: string): boolean {
+		if (nameFilter.length == 0) {
+			return true
+		}
+		return name.indexOf(nameFilter) >= 0
+	}
+
+	function startAutoDiscovery() {
+		// #ifdef MP-WEIXIN
+		uni.startBluetoothDevicesDiscovery({
+			allowDuplicatesKey: false,
+			success: () => {
+				discoveryPermissionDenied = false
+				discoveryPermissionTipShown = false
+				discoveryStarted = true
+				bleStatusText.value = '扫描中…'
+			},
+			fail: (e) => {
+				console.error('discovery', e)
+				const msg = `${e.errMsg}`
+				if (msg.indexOf('location permission is denied') >= 0) {
+					discoveryPermissionDenied = true
+					bleStatusText.value = '缺少定位权限'
+					if (!discoveryPermissionTipShown) {
+						discoveryPermissionTipShown = true
+						uni.showToast({ title: '请允许定位权限后重试', icon: 'none' })
+					}
+					return
+				}
+				uni.showToast({ title: '扫描失败', icon: 'none' })
+			},
+		})
+		// #endif
+	}
+
+	function requestLocationPermissionAndDiscover() {
+		// #ifdef MP-WEIXIN
+		uni.authorize({
+			scope: 'scope.userLocation',
+			success: () => {
+				discoveryPermissionDenied = false
+				startAutoDiscovery()
+			},
+			fail: () => {
+				discoveryPermissionDenied = true
+				bleStatusText.value = '缺少定位权限'
+				uni.showToast({ title: '请在设置中允许定位权限', icon: 'none' })
+			},
+		})
+		// #endif
+	}
+
+	function openBleAndAutoConnect() {
+		// #ifdef MP-WEIXIN
+		uni.openBluetoothAdapter({
+			success: () => {
+				ensureBleListeners()
+				requestLocationPermissionAndDiscover()
+			},
+			fail: (e) => {
+				console.error('open adapter', e)
+				bleStatusText.value = '请打开手机蓝牙'
+				uni.showToast({ title: '请先开启蓝牙', icon: 'none' })
+			},
+		})
+		// #endif
+		// #ifndef MP-WEIXIN
+		uni.showToast({ title: '请在微信小程序中测试蓝牙', icon: 'none' })
+		// #endif
+	}
+
+	function onDeviceAreaClick() {
+		// #ifdef MP-WEIXIN
+		if (discoveryPermissionDenied) {
+			uni.openSetting({
+				success: () => {
+					discoveryPermissionDenied = false
+					discoveryPermissionTipShown = false
+					openBleAndAutoConnect()
+				},
+			})
+			return
+		}
+		openBleAndAutoConnect()
+		// #endif
+		// #ifndef MP-WEIXIN
+		uni.showToast({ title: '蓝牙仅支持微信小程序', icon: 'none' })
+		// #endif
+	}
+
+	function onStartCollect() {
+		// #ifdef MP-WEIXIN
+		if (!bleConnected.value) {
+			uni.showToast({ title: '请先连接设备', icon: 'none' })
+			return
+		}
+		resetMeasureCursorToFirst()
+		writeBle(hcCommandToBuffer(CMD_SAMPSTART))
+		// #endif
+		// #ifndef MP-WEIXIN
+		resetMeasureCursorToFirst()
+		// #endif
+		uni.navigateTo({
+			url: '/pages/concrete/measure',
+			fail: (e) => {
+				console.error('navigate measure', e)
+				uni.showToast({ title: '打开测区页失败', icon: 'none' })
+			},
+		})
+	}
+
+	onLoad(() => {
+		nameFilter = TARGET_NAME_KEY
+	})
+
+	onShow(() => {
+		// #ifdef MP-WEIXIN
+		if (!bleConnected.value && !discoveryPermissionDenied) {
+			openBleAndAutoConnect()
+		}
+		// #endif
+	})
+
+	onUnload(() => {
+		// #ifdef MP-WEIXIN
+		teardownBle()
+		if (bleListenersReady) {
+			uni.offBluetoothDeviceFound(onBluetoothDeviceFoundCb)
+			bleListenersReady = false
+		}
+		uni.closeBluetoothAdapter({ complete: () => {} })
+		// #endif
+	})
+</script>
+
+<style>
+	.page-scroll {
+		flex: 1;
+		height: 100vh;
+		background-color: #f5f6f8;
+	}
+
+	.section {
+		padding: 24rpx 32rpx;
+	}
+
+	.hint {
+		padding-top: 16rpx;
+		padding-bottom: 8rpx;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.hint-text {
+		font-size: 24rpx;
+		color: #666;
+		line-height: 1.5;
+		text-align: center;
+	}
+
+	.actions {
+		flex-direction: row;
+		justify-content: center;
+		align-items: center;
+		padding-top: 8rpx;
+		padding-bottom: 8rpx;
+	}
+
+	.row-between {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+	}
+
+	.action-circle {
+		flex-direction: column;
+		align-items: center;
+		width: 280rpx;
+	}
+
+	.device-icon-wrap {
+		width: 160rpx;
+		height: 160rpx;
+		border-radius: 80rpx;
+		background-color: #e8ecf1;
+		align-items: center;
+		justify-content: center;
+		border-width: 4rpx;
+		border-style: solid;
+		border-color: transparent;
+	}
+
+	.device-icon-wrap.connected {
+		border-color: #007aff;
+		background-color: #f0f6ff;
+	}
+
+	.device-emoji {
+		font-size: 64rpx;
+	}
+
+	.action-label {
+		margin-top: 16rpx;
+		font-size: 26rpx;
+		color: #333;
+	}
+
+	.status-text {
+		margin-top: 8rpx;
+		font-size: 22rpx;
+		color: #888;
+	}
+
+	.form-block {
+		background-color: #fff;
+		border-radius: 16rpx;
+		margin-left: 24rpx;
+		margin-right: 24rpx;
+		padding: 0 24rpx;
+	}
+
+	.form-row {
+		flex-direction: row;
+		align-items: center;
+		padding: 28rpx 0;
+		border-bottom-width: 1rpx;
+		border-bottom-style: solid;
+		border-bottom-color: #eee;
+	}
+
+	.form-label {
+		font-size: 28rpx;
+		color: #333;
+		width: 200rpx;
+	}
+
+	.form-value {
+		flex: 1;
+		font-size: 28rpx;
+		color: #333;
+		text-align: right;
+	}
+
+	.chev {
+		margin-left: 12rpx;
+		font-size: 32rpx;
+		color: #c0c0c0;
+	}
+
+	.config-panel {
+		background-color: #fff;
+		border-radius: 16rpx;
+		margin: 16rpx 24rpx 0 24rpx;
+		padding: 20rpx 24rpx 24rpx 24rpx;
+	}
+
+	.config-head {
+		margin-bottom: 12rpx;
+		align-items: center;
+	}
+
+	.config-title {
+		font-size: 28rpx;
+		color: #333;
+		font-weight: bold;
+	}
+
+	.config-fetch {
+		margin: 0;
+	}
+
+	.config-err {
+		font-size: 24rpx;
+		color: #e54d42;
+		margin-bottom: 12rpx;
+	}
+
+	.config-hint {
+		font-size: 24rpx;
+		color: #888;
+		margin-bottom: 12rpx;
+	}
+
+	.config-row {
+		flex-direction: row;
+		padding: 16rpx 0;
+		border-bottom-width: 1rpx;
+		border-bottom-style: solid;
+		border-bottom-color: #f0f0f0;
+	}
+
+	.cfg-label {
+		font-size: 26rpx;
+		color: #666;
+		width: 140rpx;
+	}
+
+	.cfg-value {
+		flex: 1;
+		font-size: 26rpx;
+		color: #333;
+	}
+
+	.submit-btn {
+		margin: 32rpx 24rpx 0 24rpx;
+		background-color: #007aff;
+		border-radius: 8rpx;
+		font-size: 32rpx;
+	}
+
+	.bottom-space {
+		height: 48rpx;
+	}
+</style>

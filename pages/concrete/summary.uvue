@@ -1,0 +1,236 @@
+<template>
+	<scroll-view class="page-scroll" scroll-y="true">
+		<view class="section">
+			<text class="block-title">测量显示信息</text>
+			<text class="sub-hint">以下为仪器率定回包（进入本页会自动请求 HC+GETHTLD）</text>
+		</view>
+
+		<view class="section card">
+			<view class="disp-row">
+				<text class="disp-label">平均率定</text>
+				<text class="disp-val">{{ ldPingjun }}</text>
+			</view>
+			<view class="disp-row">
+				<text class="disp-label">结果</text>
+				<text class="disp-val">{{ ldJieguo }}</text>
+			</view>
+		</view>
+
+		<view class="section">
+			<text class="block-title">上传现场照片</text>
+			<text class="sub-hint">（可选，用于报告归档）</text>
+			<view class="upload-row" @click="chooseReportPhoto">
+				<image v-if="reportPhotoPath.length > 0" class="preview" :src="reportPhotoPath" mode="aspectFill" />
+				<view v-else class="upload-placeholder">
+					<text class="plus">+</text>
+					<text class="upload-text">选择图片</text>
+				</view>
+			</view>
+		</view>
+
+		<view class="section">
+			<text class="block-title">实验心得体会</text>
+			<textarea
+				class="note-input"
+				:value="experimentNote"
+				placeholder="请填写本次实验心得、注意事项等…"
+				@input="onNoteInput"
+			/>
+		</view>
+
+		<button class="submit-btn" type="primary" @click="onSaveReport">提交</button>
+		<view class="bottom-space" />
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import {
+		ldPingjun,
+		ldJieguo,
+		reportPhotoPath,
+		experimentNote,
+		sessionWriteBle,
+		areas,
+		contentOptions,
+		instrumentOptions,
+		contentIndex,
+		instrumentIndex,
+		photoPath,
+		htWeituo,
+		htGoujian,
+		htCequ,
+		htQuxian,
+		htLeixingDisp,
+		htBengsongDisp,
+		htCemianDisp,
+		htJiaodu,
+		htFangfaDisp,
+	} from '../../common/concreteSession.uts'
+	import { CMD_GETHTLD, hcCommandToBuffer } from '../../common/bleCommands.uts'
+
+	function onNoteInput(e: UniInputEvent) {
+		experimentNote.value = e.detail.value as string
+	}
+
+	function chooseReportPhoto() {
+		uni.chooseImage({
+			count: 1,
+			sizeType: ['compressed'],
+			sourceType: ['album', 'camera'],
+			success: (res) => {
+				const paths = res.tempFilePaths
+				if (paths.length > 0) {
+					reportPhotoPath.value = paths[0]
+				}
+			},
+		})
+	}
+
+	function requestHtLd() {
+		// #ifdef MP-WEIXIN
+		if (!sessionWriteBle(hcCommandToBuffer(CMD_GETHTLD))) {
+			uni.showToast({ title: '请先在第一页完成蓝牙连接', icon: 'none' })
+		}
+		// #endif
+	}
+
+	function onSaveReport() {
+		const payload = {
+			ldPingjun: ldPingjun.value,
+			ldJieguo: ldJieguo.value,
+			reportPhoto: reportPhotoPath.value,
+			experimentNote: experimentNote.value,
+			content: contentOptions[contentIndex.value],
+			instrument: instrumentOptions[instrumentIndex.value],
+			photo: photoPath.value,
+			deviceHtPara: {
+				weituo: htWeituo.value,
+				goujian: htGoujian.value,
+				cequ: htCequ.value,
+				quxian: htQuxian.value,
+				leixing: htLeixingDisp.value,
+				bengsong: htBengsongDisp.value,
+				cemian: htCemianDisp.value,
+				jiaodu: htJiaodu.value,
+				fangfa: htFangfaDisp.value,
+			},
+			areas: areas.value,
+		}
+		console.log('summary report', payload)
+		uni.showToast({ title: '已输出到控制台', icon: 'none' })
+	}
+
+	onShow(() => {
+		requestHtLd()
+	})
+</script>
+
+<style>
+	.page-scroll {
+		flex: 1;
+		height: 100vh;
+		background-color: #f5f6f8;
+	}
+
+	.section {
+		padding: 24rpx 32rpx;
+	}
+
+	.block-title {
+		font-size: 30rpx;
+		color: #333;
+		font-weight: bold;
+	}
+
+	.sub-hint {
+		margin-top: 8rpx;
+		font-size: 24rpx;
+		color: #888;
+		line-height: 1.4;
+	}
+
+	.card {
+		background-color: #fff;
+		border-radius: 16rpx;
+		margin-left: 24rpx;
+		margin-right: 24rpx;
+		padding: 8rpx 24rpx 16rpx 24rpx;
+	}
+
+	.disp-row {
+		flex-direction: row;
+		align-items: center;
+		padding: 20rpx 0;
+		border-bottom-width: 1rpx;
+		border-bottom-style: solid;
+		border-bottom-color: #eee;
+	}
+
+	.disp-label {
+		font-size: 28rpx;
+		color: #666;
+		width: 180rpx;
+	}
+
+	.disp-val {
+		flex: 1;
+		font-size: 28rpx;
+		color: #333;
+		font-weight: bold;
+	}
+
+	.upload-row {
+		margin-top: 20rpx;
+	}
+
+	.upload-placeholder {
+		width: 200rpx;
+		height: 200rpx;
+		background-color: #e8ecf1;
+		border-radius: 12rpx;
+		align-items: center;
+		justify-content: center;
+		flex-direction: column;
+	}
+
+	.plus {
+		font-size: 48rpx;
+		color: #999;
+	}
+
+	.upload-text {
+		margin-top: 8rpx;
+		font-size: 24rpx;
+		color: #999;
+	}
+
+	.preview {
+		width: 200rpx;
+		height: 200rpx;
+		border-radius: 12rpx;
+	}
+
+	.note-input {
+		margin-top: 16rpx;
+		min-height: 220rpx;
+		padding: 20rpx;
+		font-size: 28rpx;
+		color: #333;
+		background-color: #fff;
+		border-radius: 12rpx;
+		border-width: 1rpx;
+		border-style: solid;
+		border-color: #e0e0e0;
+	}
+
+	.submit-btn {
+		margin: 32rpx 24rpx 0 24rpx;
+		background-color: #007aff;
+		border-radius: 8rpx;
+		font-size: 32rpx;
+	}
+
+	.bottom-space {
+		height: 48rpx;
+	}
+</style>

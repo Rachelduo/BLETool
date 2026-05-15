@@ -1,0 +1,259 @@
+import { ref } from 'vue'
+import { TAG_GETHTLD, TAG_SETHTH, buildSetHthCommandBody, hcCommandToBuffer } from './bleCommands.uts'
+
+export type AreaBlock = { values: Array<string> }
+
+export const AREA_COUNT = 10
+export const SLOTS = 16
+
+export const contentOptions = ['混凝土强度', '砂浆强度', '其它']
+export const instrumentOptions = ['高/低强回弹仪', '高强回弹仪', '其它']
+
+/** 与 concrete.uvue 中 BLE 写入一致 */
+export const BLE_SERVICE_ID = 'B810093A-9130-B955-2BA1-29A9807C0F69'
+export const BLE_WRITE_CHAR_ID = '00008002-0000-1000-8000-00805F9B34FB'
+
+/** 由连接页同步，供其它页面调用 sessionWriteBle */
+export const sessionDeviceId = ref('')
+export const sessionBleReady = ref(false)
+export const sessionServiceId = ref(BLE_SERVICE_ID)
+export const sessionWriteCharId = ref(BLE_WRITE_CHAR_ID)
+
+export function buildEmptyAreas(): Array<AreaBlock> {
+	const list = new Array<AreaBlock>()
+	for (let a = 0; a < AREA_COUNT; a++) {
+		const vals = new Array<string>()
+		for (let i = 0; i < SLOTS; i++) {
+			vals.push('')
+		}
+		list.push({ values: vals })
+	}
+	return list
+}
+
+function buildEmptyCarbonization(): Array<string> {
+	const a = new Array<string>()
+	for (let i = 0; i < AREA_COUNT; i++) {
+		a.push('')
+	}
+	return a
+}
+
+export const areas = ref<Array<AreaBlock>>(buildEmptyAreas())
+/** 各测区平均碳化值（下发 HC+SETHTH） */
+export const areaCarbonization = ref<Array<string>>(buildEmptyCarbonization())
+export const activeAreaIndex = ref(0)
+export const activeSlotIndex = ref(0)
+
+export const contentIndex = ref(0)
+export const instrumentIndex = ref(0)
+export const photoPath = ref('')
+
+/** 第三页：现场照片、实验心得 */
+export const reportPhotoPath = ref('')
+export const experimentNote = ref('')
+
+/** +GETHTLD: 平均率定, 结果 */
+export const ldPingjun = ref('--')
+export const ldJieguo = ref('--')
+
+export function selectCell(ai: number, si: number) {
+	activeAreaIndex.value = ai
+	activeSlotIndex.value = si
+}
+
+/** 开始采集：从测区 1、数值 1 起填 */
+export function resetMeasureCursorToFirst() {
+	activeAreaIndex.value = 0
+	activeSlotIndex.value = 0
+}
+
+/**
+ * 蓝牙回弹写入当前格后：光标移到下一格（同测区 1→16，再下一测区）。
+ * 已在最后一格则保持，避免下标越界。
+ */
+export function advanceMeasureCursorAfterRebound() {
+	const ai = activeAreaIndex.value
+	const si = activeSlotIndex.value
+	if (si < SLOTS - 1) {
+		activeSlotIndex.value = si + 1
+		return
+	}
+	if (ai < AREA_COUNT - 1) {
+		activeAreaIndex.value = ai + 1
+		activeSlotIndex.value = 0
+		return
+	}
+}
+
+export function setAreaCarbonization(ai: number, raw: string) {
+	if (ai < 0 || ai >= AREA_COUNT) {
+		return
+	}
+	const next = areaCarbonization.value.slice(0)
+	next[ai] = raw as string
+	areaCarbonization.value = next
+}
+
+export function setActiveValue(text: string) {
+	const ai = activeAreaIndex.value
+	const si = activeSlotIndex.value
+	const block = areas.value[ai]
+	const next = block.values.slice(0)
+	next[si] = text
+	const copy = areas.value.slice(0)
+	copy[ai] = { values: next }
+	areas.value = copy
+}
+
+/** 设备读参结果，供第二页提交时一并带上 */
+export const htWeituo = ref('--')
+export const htGoujian = ref('--')
+export const htCequ = ref('--')
+export const htQuxian = ref('--')
+export const htLeixingDisp = ref('--')
+export const htBengsongDisp = ref('--')
+export const htCemianDisp = ref('--')
+export const htJiaodu = ref('--')
+export const htFangfaDisp = ref('--')
+
+export function stringToAsciiBuffer(s: string): ArrayBuffer {
+	const u8 = new Uint8Array(s.length)
+	for (let i = 0; i < s.length; i++) {
+		u8[i] = s.charCodeAt(i) & 0xff
+	}
+	return u8.buffer
+}
+
+function splitCsv(line: string): Array<string> {
+	const out = new Array<string>()
+	let cur = ''
+	for (let i = 0; i < line.length; i++) {
+		const ch = line.charAt(i)
+		if (ch == ',') {
+			out.push(cur)
+			cur = ''
+		} else {
+			cur += ch
+		}
+	}
+	out.push(cur)
+	return out
+}
+
+/** 仪器对设置碳化的应答 */
+export function tryApplySetHthFromText(t: string): boolean {
+	const tag = TAG_SETHTH
+	const i = t.indexOf(tag)
+	if (i < 0) {
+		return false
+	}
+	let rest = t.substring(i + tag.length).trim()
+	const sp = rest.indexOf(' //')
+	if (sp >= 0) {
+		rest = rest.substring(0, sp).trim()
+	}
+	if (rest.indexOf('OK') == 0 || rest == 'OK') {
+		uni.showToast({ title: '碳化设置成功', icon: 'success' })
+		return true
+	}
+	if (rest.indexOf('ERR') >= 0) {
+		if (rest.indexOf('页面') >= 0) {
+			uni.showToast({ title: '仪器页面错误', icon: 'none' })
+		} else {
+			uni.showToast({ title: '碳化参数错误', icon: 'none' })
+		}
+		return true
+	}
+	uni.showToast({ title: '碳化设置应答异常', icon: 'none' })
+	return true
+}
+
+/** 解析通知中的 +GETHTLD:平均率定,结果（可带  //完成） */
+export function tryApplyGetHtLdFromText(t: string): boolean {
+	const tag = TAG_GETHTLD
+	const i = t.indexOf(tag)
+	if (i < 0) {
+		return false
+	}
+	let rest = t.substring(i + tag.length).trim()
+	const sp = rest.indexOf(' //')
+	if (sp >= 0) {
+		rest = rest.substring(0, sp).trim()
+	}
+	const parts = splitCsv(rest)
+	if (parts.length >= 2) {
+		ldPingjun.value = parts[0].length > 0 ? parts[0] : '--'
+		ldJieguo.value = parts[1].length > 0 ? parts[1] : '--'
+	} else if (parts.length == 1 && parts[0].length > 0) {
+		ldPingjun.value = parts[0]
+		ldJieguo.value = '--'
+	}
+	return true
+}
+
+function sessionWriteBleWithMode(buffer: ArrayBuffer, writeType: string) {
+	// #ifdef MP-WEIXIN
+	uni.writeBLECharacteristicValue({
+		deviceId: sessionDeviceId.value,
+		serviceId: sessionServiceId.value,
+		characteristicId: sessionWriteCharId.value,
+		value: buffer,
+		writeType: writeType,
+		success: () => {},
+		fail: (e) => {
+			console.error('sessionWriteBLE', writeType, e)
+			if (writeType == 'writeNoResponse') {
+				sessionWriteBleWithMode(buffer, 'write')
+			}
+		},
+	})
+	// #endif
+}
+
+/** 任意页面在已连接时可发写特征（与连接页共用 deviceId） */
+export function sessionWriteBle(buffer: ArrayBuffer): boolean {
+	// #ifdef MP-WEIXIN
+	if (sessionDeviceId.value.length == 0 || !sessionBleReady.value) {
+		return false
+	}
+	sessionWriteBleWithMode(buffer, 'writeNoResponse')
+	return true
+	// #endif
+	// #ifndef MP-WEIXIN
+	return false
+	// #endif
+}
+
+/** 下发平均碳化：仅下发「从测区1起连续已填」的 n 个值（不要求填满 10 个测区） */
+export function sessionSendSetHth(): boolean {
+	const all = areaCarbonization.value
+	const prefix = new Array<string>()
+	for (let i = 0; i < AREA_COUNT; i++) {
+		const v = all[i].trim()
+		if (v.length == 0) {
+			break
+		}
+		prefix.push(v)
+	}
+	if (prefix.length == 0) {
+		uni.showToast({ title: '请至少填写一个测区的碳化值', icon: 'none' })
+		return false
+	}
+	for (let i = prefix.length; i < AREA_COUNT; i++) {
+		if (all[i].trim().length > 0) {
+			uni.showToast({ title: '请从测区1起连续填写，不要中间留空', icon: 'none' })
+			return false
+		}
+	}
+	const body = buildSetHthCommandBody(prefix.length, prefix)
+	if (body.length == 0) {
+		uni.showToast({ title: '碳化参数无效', icon: 'none' })
+		return false
+	}
+	if (!sessionWriteBle(hcCommandToBuffer(body))) {
+		uni.showToast({ title: '请先在第一页完成蓝牙连接', icon: 'none' })
+		return false
+	}
+	return true
+}

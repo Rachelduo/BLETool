@@ -1,0 +1,125 @@
+<template>
+	<scroll-view class="page-scroll" scroll-y="true">
+		<!-- 与参考稿一致：纵向列表，大图 + 下方标题（标题居中） -->
+		<view class="module-list">
+			<view class="module-row" @click="goConcrete">
+				<image
+					class="module-cover"
+					src="/static/choiceModule/hty.png"
+					mode="aspectFill"
+				/>
+				<text class="module-title">混凝土强度</text>
+			</view>
+
+			<view class="module-row" @click="goReinforcement">
+				<image
+					class="module-cover"
+					src="/static/choiceModule/hty.png"
+					mode="aspectFill"
+				/>
+				<text class="module-title">钢筋扫描仪</text>
+			</view>
+
+			<view class="module-row" @click="goFloorSlab">
+				<image
+					class="module-cover"
+					src="/static/choiceModule/hty.png"
+					mode="aspectFill"
+				/>
+				<text class="module-title">楼板测厚</text>
+			</view>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	function goConcrete() {
+		uni.navigateTo({
+			url: '/pages/concrete/concrete',
+			fail: (e) => {
+				console.error('navigate concrete', e)
+				uni.showToast({ title: '打开失败', icon: 'none' })
+			},
+		})
+	}
+
+	function goReinforcement() {
+		uni.navigateTo({
+			url: '/pages/Reinforcement/Reinforcement',
+			fail: (e) => {
+				console.error('navigate reinforcement', e)
+				uni.showToast({ title: '打开失败', icon: 'none' })
+			},
+		})
+	}
+
+	function goFloorSlab() {
+		uni.navigateTo({
+			url: '/pages/floorSlab/floorSlab',
+			fail: (e) => {
+				console.error('navigate floorSlab', e)
+				uni.showToast({ title: '打开失败', icon: 'none' })
+			},
+		})
+	}
+</script>
+
+<style>
+	.page-scroll {
+		flex: 1;
+		height: 100vh;
+		margin-top: 30rpx;
+		background-color: #f5f6f8;
+	}
+
+	.section {
+		padding: 32rpx 32rpx 16rpx 32rpx;
+	}
+
+	.head {
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.page-title {
+		font-size: 36rpx;
+		font-weight: bold;
+		color: #222;
+		text-align: center;
+	}
+
+	.page-sub {
+		margin-top: 12rpx;
+		font-size: 26rpx;
+		color: #888;
+		text-align: center;
+	}
+
+	.module-list {
+		flex-direction: column;
+		padding: 8rpx 32rpx 48rpx 32rpx;
+	}
+
+	.module-row {
+		width: 100%;
+		margin-bottom: 40rpx;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.module-cover {
+		width: 100%;
+		height: 300rpx;
+		border-radius: 20rpx;
+		background-color: #e8ecf1;
+	}
+
+	.module-title {
+		margin-top: 24rpx;
+		width: 100%;
+		font-size: 32rpx;
+		font-weight: bold;
+		color: #333;
+		text-align: center;
+	}
+</style>
